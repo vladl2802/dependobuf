@@ -1,6 +1,6 @@
-[package]
-name = "dependobuf"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+members = ["dbuf-core"]
+resolver = "2"
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
