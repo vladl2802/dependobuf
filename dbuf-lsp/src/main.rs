@@ -3,13 +3,14 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 #[allow(unused_imports)]
+#[allow(clippy::single_component_path_imports)]
 use dbuf_core;
 
 #[derive(Debug)]
 #[allow(dead_code)]
 struct Backend {
     client: Client,
-    
+
     ast: Option<()>,
 }
 
@@ -97,9 +98,6 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| Backend {
-        client,
-        ast: None,
-    });
+    let (service, socket) = LspService::new(|client| Backend { client, ast: None });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
