@@ -74,7 +74,7 @@ pub enum PatternNode<Str, Pattern> {
     /// Constructor call, or just a variable.
     Call { name: Str, fields: Rec<[Pattern]> },
     /// Literal.
-    Literal(Literal<Str>),
+    Literal(Literal),
     /// A catch-all pattern.
     Underscore,
 }
