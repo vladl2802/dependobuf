@@ -22,7 +22,7 @@ pub enum Literal {
 }
 
 /// Unary operators used in DependoBuf expressions.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnaryOp<S> {
     /// Access the field in a record.
     Access(S),
@@ -33,7 +33,7 @@ pub enum UnaryOp<S> {
 }
 
 /// Binary operators used in DependoBuf expressions.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BinaryOp {
     /// Binary plus.
     Plus,
