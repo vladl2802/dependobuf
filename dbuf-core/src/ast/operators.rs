@@ -1,10 +1,10 @@
 /// Possible shapes of DependoBuf operator calls.
 ///
 /// NOTE: this includes literals as they can be viewed as "nullary operators".
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum OpCall<S, T> {
     /// Literal (nullary operator call).
-    Literal(Literal<S>),
+    Literal(Literal),
     /// Unary operator call.
     Unary(UnaryOp<S>, T),
     /// Binary operator call.
@@ -12,17 +12,17 @@ pub enum OpCall<S, T> {
 }
 
 /// Literals used in DependoBuf expressions.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub enum Literal<S> {
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Literal {
     Bool(bool),
     Double(f64),
     Int(i64),
     UInt(u64),
-    Str(S),
+    Str(String),
 }
 
 /// Unary operators used in DependoBuf expressions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnaryOp<S> {
     /// Access the field in a record.
     Access(S),
@@ -33,7 +33,7 @@ pub enum UnaryOp<S> {
 }
 
 /// Binary operators used in DependoBuf expressions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BinaryOp {
     /// Binary plus.
     Plus,
