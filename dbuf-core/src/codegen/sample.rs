@@ -5,85 +5,160 @@ pub enum ConstructorError {
 }
 
 #[derive(PartialEq, Eq)]
-struct Message<Body, Dependencies> {
+pub struct Message<Body, Dependencies> {
     pub body: Body,
     pub dependencies: Dependencies,
 }
 
 // actual generated part
 
-type Box<T> = std::boxed::Box<T>;
+// prelude
+pub type Box<T> = std::boxed::Box<T>;
 
-mod nat {
+// generated for Nat from
+// -- dependobuf syntax
+// enum Nat {
+//     Zero {}
+//     Suc {
+//         pred Nat
+//     }
+// }
+// -- elaborated ast
+// Its Type
+// Type {
+//     dependencies: Vec::new(),
+//     constructor_names: ConstructorNames::OfEnum(
+//         ["Zero", "Suc"].into_iter().map(|s| s.to_owned()).collect(),
+//     ),
+// };
+// Corresponding part of constructors
+// [
+//     (
+//         "Zero",
+//         Constructor {
+//             implicits: Vec::new(),
+//             fields: Vec::new(),
+//             result_type: Expression::Type {
+//                 name: "Nat".to_owned(),
+//                 dependencies: Rec::new([]),
+//             },
+//         },
+//     ),
+//     (
+//         "Suc",
+//         Constructor {
+//             implicits: Vec::new(),
+//             fields: vec![(
+//                 "pred".to_owned(),
+//                 Expression::Type {
+//                     name: "Nat".to_owned(),
+//                     dependencies: Rec::new([]),
+//                 },
+//             )],
+//             result_type: Expression::Type {
+//                 name: "Nat".to_owned(),
+//                 dependencies: Rec::new([]),
+//             },
+//         },
+//     ),
+// ];
+
+// module that contains all implementation
+pub mod nat {
+    // general prelude
     use super::{Box, ConstructorError, Message};
 
+    // optional part where used types are imported
+
+    // body definition
     #[derive(PartialEq, Eq)]
     pub enum Body {
         Zero,
-        Suc(Box<Self>),
+        Suc { pred: Box<Self> },
     }
 
-    pub type Nat = Body;
+    // dependencies definition
+    #[derive(PartialEq, Eq)]
+    pub struct Dependencies {}
 
+    // alias for the generated type
+    pub type Nat = Message<Body, Dependencies>;
+
+    // inherit implementation with all constructors
     impl Nat {
-        pub fn zero() -> Self {
-            Nat::Zero
+        pub fn zero(dependencies: Dependencies) -> Result<Self, ConstructorError> {
+            let body = Body::Zero;
+            Ok(Message { body, dependencies })
         }
 
-        pub fn suc(pred: Nat) -> Self {
-            Nat::Suc(Box::new(pred))
+        pub fn suc(dependencies: Dependencies, pred: Nat) -> Result<Self, ConstructorError> {
+            let body = Body::Suc {
+                pred: Box::new(pred.body),
+            };
+            Ok(Message { body, dependencies })
         }
     }
 }
 
-use nat::Nat;
+pub use nat::Nat;
+
+// generated for Nat from
+// -- dependobuf syntax
+// enum Vec {
+//     Zero {}
+//     Suc {
+//         pred Nat
+//     }
+// }
+// -- elaborated ast
+// TODO
 
 mod vec {
-    use super::{Box, ConstructorError, Message};
-
-    use super::Nat;
+    mod deps {
+        pub use super::super::{Box, ConstructorError, Message};
+        pub use super::super::{nat, Nat};
+    }
 
     #[derive(PartialEq, Eq)]
     pub enum Body {
         Nil,
-        Cons { val: u64, tail: Box<Self> },
+        Cons { val: u64, tail: deps::Box<Self> },
     }
 
     #[derive(PartialEq, Eq)]
     pub struct Dependencies {
-        n: Nat,
+        n: deps::Nat,
     }
 
-    pub type Vec = Message<Body, Dependencies>;
+    pub type Vec = deps::Message<Body, Dependencies>;
 
     impl Vec {
-        pub fn nil(dependencies: Dependencies) -> Result<Self, ConstructorError> {
-            let body = match &dependencies.n {
-                Nat::Zero => Ok(Body::Nil),
-                _ => Err(ConstructorError::MismatchedDependencies),
+        pub fn nil(dependencies: Dependencies) -> Result<Self, deps::ConstructorError> {
+            let body = match &dependencies.n.body {
+                deps::nat::Body::Zero => Ok(Body::Nil),
+                _ => Err(deps::ConstructorError::MismatchedDependencies),
             }?;
-            Ok(Message { body, dependencies })
+            Ok(deps::Message { body, dependencies })
         }
 
         pub fn cons(
             dependencies: Dependencies,
             val: u64,
             tail: Self,
-        ) -> Result<Self, ConstructorError> {
-            let body = match &dependencies.n {
-                Nat::Suc(nat) => {
-                    if tail.dependencies.n == **nat {
-                        Ok(Body::Cons {
-                            val,
-                            tail: Box::new(tail.body),
-                        })
-                    } else {
-                        Err(ConstructorError::MismatchedDependencies)
-                    }
+        ) -> Result<Self, deps::ConstructorError> {
+            let body = if let deps::nat::Body::Suc { pred } = &dependencies.n.body {
+                if tail.dependencies.n.body == **pred {
+                    Ok(Body::Cons {
+                        val,
+                        tail: Box::new(tail.body),
+                    })
+                } else {
+                    Err(deps::ConstructorError::MismatchedDependencies)
                 }
-                _ => Err(ConstructorError::MismatchedDependencies),
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
             }?;
-            Ok(Message { body, dependencies })
+            Ok(deps::Message { body, dependencies })
         }
     }
 }

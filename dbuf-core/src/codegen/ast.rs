@@ -11,6 +11,18 @@ type ElaboratedModule = elaborated::Module<Str>;
 type ElaboratedContext = elaborated::Context<Str>;
 type ElaboratedConstructor = elaborated::Constructor<Str>;
 
+// This implementation has one huge downside: 
+// It uses Rc and Weak in order to have references to associated objects smarter then strings (which also requires 
+// global hashmap). For example codegen::ast::Expression::Constructor stores weak reference to the corresponding 
+// codegen::ast::Constructor while ast::elaborated::Expression::Constructor stores just the name of the constructor 
+// which then must be located in constructor list
+//
+// Current implementation is not aware that whole ast has one lifetime, and any smart pointer deref should 
+// return one common lifetime.
+// 
+// TODO: So at some point I want to rewrite this to custom indices wrapper that are aware of lifetime.
+// Until that point I must clone in some places in order to please Rust gods.
+
 #[derive(Clone, Copy)]
 struct ASTContext<'a> {
     types: &'a Scope<'a, String, Rc<Type>>,
@@ -22,11 +34,13 @@ pub struct Module {
     pub types: Vec<Rc<Type>>,
 }
 
-enum TypeKind {
+#[derive(Clone)]
+pub enum TypeKind {
     Message,
     Enum,
 }
 
+#[derive(Clone)]
 pub struct Type {
     pub name: Str,
     pub dependencies: Vec<Rc<Symbol>>,
@@ -34,6 +48,7 @@ pub struct Type {
     pub kind: TypeKind,
 }
 
+#[derive(Clone)]
 pub struct Constructor {
     pub name: Str,
     pub implicits: Vec<Rc<Symbol>>,
@@ -41,7 +56,8 @@ pub struct Constructor {
     pub result_type: TypeExpression,
 }
 
-enum Expression {
+#[derive(Clone)]
+pub enum Expression {
     OpCall(OpCall<Str, Box<Expression>>),
     Type {
         call: Weak<Type>,
@@ -49,7 +65,7 @@ enum Expression {
     },
     Constructor {
         call: Weak<Constructor>,
-        dependencies: Vec<Expression>,
+        implicits: Vec<Expression>,
         arguments: Vec<Expression>,
     },
     Variable(Weak<Symbol>),
@@ -57,6 +73,7 @@ enum Expression {
 
 type TypeExpression = Expression;
 
+#[derive(Clone)]
 pub struct Symbol {
     pub name: Str,
     pub ty: TypeExpression,
@@ -252,7 +269,7 @@ impl Expression {
                     .get(&name)
                     .expect("codegen expects valid elaborated ast: call to unknown constructor");
 
-                let dependencies = implicits
+                let implicits = implicits
                     .iter()
                     .cloned()
                     .map(|expr| Expression::from_elaborated(context, expr))
@@ -266,7 +283,7 @@ impl Expression {
 
                 Expression::Constructor {
                     call: Rc::downgrade(call),
-                    dependencies,
+                    implicits,
                     arguments,
                 }
             }
