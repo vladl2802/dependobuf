@@ -1,4 +1,4 @@
-use super::codegen::Tag;
+use super::identifiers::{Formattable, Tag};
 use std::{
     collections::{
         hash_map::{self, Entry},
@@ -10,7 +10,8 @@ use std::{
 /// HashMap wrapper that supports natural for the scopes nesting
 pub struct Scope<'a, Key, Value>
 where
-    Key: Hash + Eq,
+    Key: Hash + Eq + 'a,
+    Value: 'a,
 {
     parent: Option<&'a Scope<'a, Key, Value>>,
     map: HashMap<Key, Value>,
@@ -138,49 +139,76 @@ where
     }
 }
 
-/// TODO: Update doc
-/// 
-/// This scope is used to track variables with the same name and give them additional unique tag in the form u32
-/// which will be used later by formatter in order to generate unique name.
-///
-/// The reason why this requires special scope wrapper is following:
-/// scope can only provide some value (of distinctive type) that we can afterwards use in some identifier formatter
-/// to create unique identifier name. But we need to update distinctive.
+// TODO: For now TaggerScope stores actual String representation of Value in order to track values with same name
+// but that's unreasonable copy, because we actually store Value already. If it's string representation can be cheaply
+// computed, then it's unreasonable to store copy.
+// Potential solution could be to store some kind of StringRepr<Value> which just stores reference to value and
+// can be cheaply check for the equality and provide its hash
+
+/// This scope is used to track variables with the same name and give them additional unique tag
+/// which can be used later by formatter in order to generate unique name.
 ///
 /// So, NamingScope responsible for given identifier formatter unique tag.
 pub struct TaggerScope<'a, Value>
 where
-    Value: Hash + Eq,
+    Value: Formattable + Hash + Eq + 'a,
 {
+    tagger: Scope<'a, String, Tag>,
     scope: Scope<'a, Value, Tag>,
 }
 
 impl<'a, Value> TaggerScope<'a, Value>
 where
-    Value: Hash + Eq,
+    Value: Formattable + Hash + Eq,
 {
     pub fn empty() -> Self {
         TaggerScope {
+            tagger: Scope::empty(),
             scope: Scope::empty(),
         }
     }
 
     pub fn nested_in(parent: &'a TaggerScope<'a, Value>) -> Self {
         TaggerScope {
+            tagger: Scope::nested_in(&parent.tagger),
             scope: Scope::nested_in(&parent.scope),
         }
     }
 
-    pub fn contains(&self, key: &Value) -> bool {
-        self.scope.contains(key)
+    pub fn contains(&self, value: &Value) -> bool {
+        self.scope.contains(value)
     }
 
-    pub fn try_insert(&mut self, key: Value) -> bool {
-        self.scope.try_insert(key, Tag::default())
+    pub fn get(&self, value: &Value) -> Option<Tag> {
+        self.scope.get(value).copied()
     }
 
-    pub fn insert(&mut self, key: Value) -> Tag {
-        match self.scope.map.entry(key) {
+    pub fn try_insert(&mut self, value: Value) -> Option<Tag> {
+        let string = value.format();
+        if self.tagger.contains(&string) {
+            None
+        } else {
+            let tag = Tag::default();
+            assert!(
+                self.tagger.try_insert(string, tag),
+                "tagger contain and try_insert contradict"
+            );
+            assert!(
+                self.scope.try_insert(value, tag),
+                "tagger try_insert succeed but scope try_insert failed"
+            );
+            Some(tag)
+        }
+    }
+
+    /// If value was already inserted does nothing and returns stored for it tag
+    pub fn insert(&mut self, value: Value) -> Tag {
+        let string = value.format();
+        let vacant = match self.scope.map.entry(value) {
+            Entry::Occupied(occupied) => return occupied.get().clone(),
+            Entry::Vacant(vacant) => vacant,
+        };
+        let tag = match self.tagger.map.entry(string) {
             hash_map::Entry::Occupied(mut occupied) => {
                 let tag = occupied.get().inc();
                 occupied.insert(tag.clone());
@@ -188,7 +216,7 @@ where
             }
             hash_map::Entry::Vacant(vacant) => {
                 let tag = self
-                    .scope
+                    .tagger
                     .parent
                     .and_then(|parent| parent.get(vacant.key()))
                     .cloned()
@@ -197,34 +225,8 @@ where
                 vacant.insert(tag.clone());
                 tag
             }
-        }
+        };
+        vacant.insert(tag);
+        tag
     }
 }
-
-// struct NamerScope
-//
-// pub fn name_and_add(&mut self, base: &str) -> String {
-//     let suffix = match self.used_names.entry(base.to_owned()) {
-//         Entry::Occupied(mut occupied) => {
-//             *occupied.get_mut() += 1;
-//             *occupied.get()
-//         }
-//         Entry::Vacant(vacant) => {
-//             let new_suffix = match self.parent.and_then(|parent| parent.last_used_suffix(base))
-//             {
-//                 Some(suffix) => suffix + 1,
-//                 None => 0,
-//             };
-//             vacant.insert(new_suffix);
-//             new_suffix
-//         }
-//     };
-//     Self::format(base, suffix)
-// }
-
-// fn format(base: &str, suffix: u32) -> String {
-//     match suffix {
-//         0 => base.to_owned(),
-//         _ => format!("{}_{}", base, suffix),
-//     }
-// }

@@ -220,6 +220,16 @@ impl Constructor {
             result_type,
         }
     }
+
+    // TODO: maybe move such helpers to the separate file
+    /// Splits return type expression into Type and Dependencies
+    pub fn split_return_type<'a>(&'a self) -> (Rc<Type>, &'a Vec<Expression>) {
+        if let Expression::Type { call, dependencies } = &self.result_type {
+            (call.upgrade().expect("call to unknown type"), dependencies)
+        } else {
+            panic!("constructor result type is not type expression")
+        }
+    }
 }
 
 impl Expression {

@@ -1,14 +1,14 @@
-use std::iter;
+use std::rc::Rc;
 
 use super::{
     ast::{self, Constructor, Expression, Module, Symbol, Type},
-    scope::{Scope, TaggerScope},    
+    identifiers::{self, Identifier, NamingScope},
     BoxAllocator, BoxDoc, DocAllocator, NEST_UNIT,
 };
 
 // TODO: make string here and in ast stored in arena and remove cloning
 
-// TODO: crate Codegen trait in order to generate helper functions. For example:
+// TODO: introduce Codegen trait in order to generate helper functions. For example:
 // suppose that we have implemented
 // TypeDefinitionCodegen::generate(ty: &Type, context: CodegenContext<'a>, scope: &NamingScope<'_>) -> BoxDoc<'a>
 // then it can automatically generate
@@ -16,106 +16,13 @@ use super::{
 // saving tedious maps that I must write for now
 
 #[derive(Clone, Copy)]
-struct CodegenContext<'a> {
-    alloc: &'a BoxAllocator,
-}
-
-type NamingScope<'a> = TaggerScope<'a, Identifier>;
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Tag(u32);
-
-impl Tag {
-    pub fn inc(self) -> Self {
-        Tag(self.0 + 1)
-    }
-}
-
-impl Default for Tag {
-    fn default() -> Self {
-        Tag(0)
-    }
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-enum IdentifierKind {
-    Module,
-    Function,
-    Variable,
-    Type,
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Identifier {
-    // String here is not optimal. Something like Vec<Word> seems more appropriate.
-    // Were Word insures that string in lowered so it can be easily formatted to camelCase or snake_case.
-    name: String,
-    kind: IdentifierKind,
-}
-
-impl<'a> Identifier {
-    pub fn module(name: String) -> Self {
-        Identifier {
-            name,
-            kind: IdentifierKind::Module,
-        }
-    }
-
-    pub fn function(name: String) -> Self {
-        Identifier {
-            name,
-            kind: IdentifierKind::Function,
-        }
-    }
-
-    pub fn variable(name: String) -> Self {
-        Identifier {
-            name,
-            kind: IdentifierKind::Variable,
-        }
-    }
-
-    pub fn ty(name: String) -> Self {
-        Identifier {
-            name,
-            kind: IdentifierKind::Type,
-        }
-    }
-
-    pub fn try_generate(
-        self,
-        context: CodegenContext<'a>,
-        scope: &mut NamingScope<'_>,
-    ) -> Option<BoxDoc<'a>> {
-        if scope.try_insert(self.clone()) {
-            Some(self.format(Tag::default(), context.alloc))
-        } else {
-            None
-        }
-    }
-
-    pub fn generate(self, context: CodegenContext<'a>, scope: &mut NamingScope<'_>) -> BoxDoc<'a> {
-        let tag = scope.insert(self.clone());
-        self.format(tag, context.alloc)
-    }
-
-    // TODO: do kind specific formatting (needs conversion of vec of words into camelCase, snake_case, etc.)
-    fn format(self, tag: Tag, alloc: &'a BoxAllocator) -> BoxDoc<'a> {
-        if tag.0 == 0 {
-            alloc.text(self.name).into_doc()
-        } else {
-            alloc
-                .text(self.name)
-                .append("_")
-                .append(tag.0.to_string())
-                .into_doc()
-        }
-    }
+pub struct CodegenContext<'a> {
+    pub alloc: &'a BoxAllocator,
 }
 
 impl<'a> Module {
-    pub fn generate(self, context: CodegenContext<'a>, scope: &mut NamingScope<'_>) -> BoxDoc<'a> {
-        let alloc = context.alloc;
+    pub fn generate(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'_>) -> BoxDoc<'a> {
+        let alloc = ctx.alloc;
         let aliases = alloc
             .text("mod aliases {")
             .append(alloc.intersperse(
@@ -128,8 +35,8 @@ impl<'a> Module {
 
         let types = self
             .types
-            .into_iter()
-            .map(|ty| (*ty).clone().generate(context, scope))
+            .iter()
+            .map(|ty| (*ty).clone().generate(ctx, scope))
             .collect::<Vec<_>>();
 
         aliases.append(alloc.intersperse(types, alloc.line()))
@@ -137,16 +44,16 @@ impl<'a> Module {
 }
 
 impl<'a> Type {
-    pub fn generate(self, context: CodegenContext<'a>, scope: &mut NamingScope<'_>) -> BoxDoc<'a> {
+    pub fn generate(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'_>) -> BoxDoc<'a> {
         let prelude =
             BoxDoc::text("use super::{Box, ConstructorError, Message}").append(BoxDoc::line());
 
         let module = BoxDoc::intersperse(
             [
                 prelude,
-                self.generate_dependencies_import(context, scope),
-                self.generate_declaration(context, scope),
-                self.generate_inherent_impl(context, scope),
+                self.generate_dependencies_import(ctx, scope),
+                self.generate_declaration(ctx, scope),
+                self.generate_inherent_impl(ctx, scope),
             ],
             BoxDoc::line(),
         );
@@ -159,22 +66,23 @@ impl<'a> Type {
 }
 
 mod type_dependencies_import {
+    use super::ast::{Constructor, Expression, Symbol, Type};
+    use super::identifiers::{self, Identifier};
     use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, NEST_UNIT};
-    use super::{Constructor, Expression, Identifier, Symbol, Type};
     use std::{collections::hash_set::HashSet, iter, rc::Rc};
 
     impl<'a> Type {
         pub(super) fn generate_dependencies_import(
             &self,
-            context: CodegenContext<'a>,
+            ctx: CodegenContext<'a>,
             scope: &mut NamingScope<'_>,
         ) -> BoxDoc<'a> {
-            let deps = Identifier::module("deps".to_owned())
-                .try_generate(context, scope)
+            let deps = identifiers::Module::from_name("deps".to_owned())
+                .try_generate(ctx, scope)
                 .expect("couldn't create 'deps' module");
             let mut deps_scope = NamingScope::nested_in(&scope);
             let scope = &mut deps_scope;
-            let alloc = context.alloc;
+            let alloc = ctx.alloc;
 
             let mut dependencies: HashSet<_> = self
                 .constructors
@@ -210,11 +118,11 @@ mod type_dependencies_import {
                 .text("use super::super::{")
                 .append(alloc.intersperse(
                     dependencies.into_iter().map(|name| {
-                        let ty = Identifier::ty(name.clone())
-                            .try_generate(context, scope)
+                        let ty = identifiers::Type::from_name(name.clone())
+                            .try_generate(ctx, scope)
                             .expect("couldn't import dependence");
-                        let module = Identifier::module(name.clone())
-                            .try_generate(context, scope)
+                        let module = identifiers::Module::from_name(name.clone())
+                            .try_generate(ctx, scope)
                             .expect("couldn't import dependence");
                         alloc
                             .text("{")
@@ -306,24 +214,25 @@ mod type_dependencies_import {
 }
 
 mod type_declaration {
-    use super::{ast, Identifier, Symbol, Type};
+    use super::ast::{self, Symbol, Type};
+    use super::identifiers::{self, Identifier};
     use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, NEST_UNIT};
     use std::rc::Rc;
 
     impl<'a> Type {
         pub(super) fn generate_declaration(
             &self,
-            context: CodegenContext<'a>,
+            ctx: CodegenContext<'a>,
             scope: &mut NamingScope<'_>,
         ) -> BoxDoc<'a> {
-            let alloc = context.alloc;
+            let alloc = ctx.alloc;
 
-            let body = self.generate_body(context, scope);
-            let dependencies = self.generate_body(context, scope);
+            let body = self.generate_body(ctx, scope);
+            let dependencies = self.generate_dependencies(ctx, scope);
 
             let name_alias = alloc
                 .text("pub type ")
-                .append(Identifier::ty(self.name.clone()).generate(context, scope))
+                .append(self.generate_comptime_type(ctx, scope))
                 // deps module provided by type_dependencies_import
                 .append(" = deps::Message<Body, Dependencies>;")
                 .append(BoxDoc::line())
@@ -336,65 +245,63 @@ mod type_declaration {
 
         fn generate_body(
             &self,
-            context: CodegenContext<'a>,
+            ctx: CodegenContext<'a>,
             scope: &mut NamingScope<'_>,
         ) -> BoxDoc<'a> {
-            let alloc = context.alloc;
+            let alloc = ctx.alloc;
 
-            let body = Identifier::ty("body".to_owned())
-                .try_generate(context, scope)
+            let body = identifiers::Type::from_name("body".to_owned())
+                .try_generate(ctx, scope)
                 .expect("failed to declare Body");
 
-            // in future, as I implement Codegen::generate as trait, those helper function can be generated automatically
+            // if I implement Codegen::generate as trait, those helper function can be generated automatically
             let generate_fields = |fields: &Vec<Rc<Symbol>>, scope: &mut NamingScope<'_>| {
                 fields
                     .iter()
-                    .map(|symbol| {
-                        let symbol = (**symbol).clone();
-                        symbol.generate_declaration(context, scope)
-                    })
+                    .map(|symbol| symbol.clone().generate_as_field_declaration(ctx, scope))
                     .collect::<Vec<_>>()
             };
 
-            let fields =
-                match self.kind {
-                    ast::TypeKind::Message => {
-                        debug_assert!(
-                            self.constructors.len() == 1,
-                            "Message expected to have only one constructor"
-                        );
-                        let constructor = self.constructors[0]
-                            .upgrade()
-                            .expect("missing type constructor");
-                        alloc.intersperse(generate_fields(&constructor.fields, scope), alloc.line())
-                    }
-                    ast::TypeKind::Enum => {
-                        let mut branch_scope = NamingScope::nested_in(&scope);
-                        let scope = &mut branch_scope;
-                        alloc.intersperse(
-                            self.constructors
-                                .iter()
-                                .map(|constructor| {
-                                    let constructor =
-                                        &*constructor.upgrade().expect("missing type constructor");
-                                    let fields = generate_fields(&constructor.fields, scope);
-                                    // TODO: that's not really accurate, enum variant do not match type behavior in
-                                    // scopes, because it will not shadow names in the scope where enum is declared
-                                    let name = Identifier::ty(constructor.name.clone())
-                                        .try_generate(context, scope)
-                                        .expect("failed to declare constructor (enum variant)");
-                                    name.append(" {")
-                                        .append(alloc.intersperse(
+            let fields = match self.kind {
+                ast::TypeKind::Message => {
+                    debug_assert!(
+                        self.constructors.len() == 1,
+                        "Message expected to have only one constructor"
+                    );
+                    let constructor = self.constructors[0]
+                        .upgrade()
+                        .expect("missing type constructor");
+                    alloc.intersperse(generate_fields(&constructor.fields, scope), alloc.line())
+                }
+                ast::TypeKind::Enum => {
+                    let mut branch_scope = NamingScope::nested_in(&scope);
+                    let scope = &mut branch_scope;
+                    alloc.intersperse(
+                        self.constructors
+                            .iter()
+                            .map(|constructor| {
+                                let constructor =
+                                    &*constructor.upgrade().expect("missing type constructor");
+                                let fields = generate_fields(&constructor.fields, scope);
+                                // TODO: that's not really accurate, enum variant do not match with type behavior in
+                                // scopes, because it will not shadow names in the scope where enum is declared
+                                let name = identifiers::Type::from_name(constructor.name.clone())
+                                    .try_generate(ctx, scope)
+                                    .expect("failed to declare constructor (enum variant)");
+                                name.append(" {")
+                                    .append(
+                                        alloc.intersperse(
                                             fields,
                                             alloc.text(",").append(alloc.line()),
-                                        ))
-                                        .append("}")
-                                })
-                                .collect::<Vec<_>>(),
-                            alloc.text(",").append(alloc.line()),
-                        )
-                    }
-                };
+                                        ),
+                                    )
+                                    .append("}")
+                            })
+                            .collect::<Vec<_>>(),
+                        alloc.text(",").append(alloc.line()),
+                    )
+                }
+            };
 
             let holder = match self.kind {
                 ast::TypeKind::Message => "enum",
@@ -420,9 +327,9 @@ mod type_declaration {
         ) -> BoxDoc<'a> {
             let alloc = context.alloc;
 
-            let dependencies = Identifier::ty("Dependencies".to_owned())
+            let dependencies = identifiers::Type::from_name("Dependencies".to_owned())
                 .try_generate(context, scope)
-                .expect("failed to define Dependence");
+                .expect("failed to define Dependencies");
 
             alloc
                 .text("#[derive(PartialEq, Eq)]")
@@ -435,8 +342,7 @@ mod type_declaration {
                         self.dependencies
                             .iter()
                             .map(|symbol| {
-                                let symbol = (**symbol).clone();
-                                symbol.generate_declaration(context, scope)
+                                symbol.clone().generate_as_field_declaration(context, scope)
                             })
                             .collect::<Vec<_>>(),
                         alloc.line(),
@@ -450,17 +356,58 @@ mod type_declaration {
     }
 }
 
-// WIP
-// Current problem: NamingScope has no way of returning tag that he give to some Value afterwards.
-// This really limits its usability in the face of many variables. For example with enum branching in dependobuf it is really useful.
-// 
-// Also, current implementation of tags and identifiers seems to miss its goals, because when constructing identifier from Symbol,
-// you nearly lose track of what was that symbol. So this maybe needs to be rethinked.
-//
-// Possible solution could be: add variant Symbol (which is special variable) to the Identifier enum 
+impl<'a> Type {
+    pub fn generate_type_dependencies_struct(
+        &self,
+        ctx: CodegenContext<'a>,
+        scope: &mut NamingScope<'_>,
+        values: Vec<BoxDoc<'a>>,
+    ) -> BoxDoc<'a> {
+        assert!(
+            values.len() == self.dependencies.len(),
+            "not enough/to much values to initialize Dependencies"
+        );
+        let alloc = ctx.alloc;
+        identifiers::Type::from_name("Dependencies".to_owned())
+            .get_generated(ctx, scope)
+            .expect("Dependencies struct must be already generated")
+            .append(" {")
+            .append(alloc.line())
+            .append(
+                alloc.intersperse(
+                    self.dependencies
+                        .iter()
+                        .zip(values.iter())
+                        .map(|(symbol, value)| {
+                            symbol
+                                .clone()
+                                .generate_as_field_name(ctx, scope)
+                                .append(": ")
+                                .append(value.clone())
+                        }),
+                    alloc.text(",").append(alloc.line()),
+                ),
+            )
+            .append(alloc.line())
+            .append("}")
+    }
+}
+
+impl<'a> Type {
+    pub fn generate_comptime_type(
+        &self,
+        ctx: CodegenContext<'a>,
+        scope: &mut NamingScope<'_>,
+    ) -> BoxDoc<'a> {
+        identifiers::Type::from_name(self.name.clone())
+            .try_generate(ctx, scope)
+            .expect("failed to generate Type compile time type")
+    }
+}
 
 mod type_inherent_impl {
-    use super::{ast, Expression, Constructor, Identifier, Symbol, Type};
+    use super::ast::{self, Constructor, Expression, Symbol, Type};
+    use super::identifiers::{self, Identifier};
     use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, NEST_UNIT};
     use std::{iter, rc::Rc};
 
@@ -472,7 +419,7 @@ mod type_inherent_impl {
         ) -> BoxDoc<'a> {
             let constructors = self.constructors.iter().map(|constructor| {
                 let constructor = &*constructor.upgrade().expect("missing type constructor");
-                constructor.generate_constructor(context, scope)    
+                constructor.generate_constructor_declaration(context, scope)
             });
 
             let setters = iter::once(BoxDoc::nil());
@@ -484,80 +431,295 @@ mod type_inherent_impl {
     }
 
     impl<'a> Constructor {
-        pub fn generate_constructor(
+        // this function is kind of mess.. TODO: when something like NodeId will be implemented, revisit this
+        pub fn generate_constructor_declaration(
             &self,
-            context: CodegenContext<'a>,
+            ctx: CodegenContext<'a>,
             scope: &mut NamingScope<'_>,
         ) -> BoxDoc<'a> {
-            let constructor = Identifier::function(self.name.clone())
-                .try_generate(context, scope)
-                .expect("failed to name constructor");
+            let alloc = ctx.alloc;
+            let constructor_name = self.generate_constructor_name(ctx, scope);
 
-            let constructor_scope = NamingScope::nested_in(scope);
+            let mut constructor_scope = NamingScope::nested_in(scope);
             let scope = &mut constructor_scope;
 
             // order matters because there can be field name "dependencies" and I want to preserve params names
-            let params = self.fields.iter().map(|symbol| {
-                Identifier::variable(symbol.name)
-                    .try_generate(context, scope)
-                    .expect("failed to name constructor param")
-            });
+            let params = self
+                .fields
+                .iter()
+                .map(|symbol| {
+                    identifiers::Variable::from_symbol(symbol.clone())
+                        .try_generate(ctx, scope)
+                        .expect("failed to name constructor param")
+                })
+                .collect::<Vec<_>>();
             let dependencies_param =
-                Identifier::variable("dependencies".to_owned()).generate(context, scope);
-            let params = iter::once(dependencies_param)
+                identifiers::Variable::from_name("dependencies".to_owned()).generate(ctx, scope);
+            let params = iter::once(dependencies_param.clone())
                 .chain(params)
                 .collect::<Vec<_>>();
 
-            let body = self.generate_constructor_body(context, scope);
+            let (ty, dependencies) = self.split_return_type();
 
-            BoxDoc::text(format!("pub fn {}(", constructor.name))
-                .append(BoxDoc::intersperse(
-                    params,
-                        BoxDoc::text(name).append(BoxDoc::text(": ")).append(ty)),
-                    BoxDoc::text(", "),
+            let ifelse2 = alloc.text("if (").append(alloc.intersperse(
+                self.fields.iter().map(|symbol| {
+                    let field = identifiers::Variable::from_symbol(symbol.clone())
+                        .get_generated(ctx, scope)
+                        .expect("constructor params must be already in the scope");
+                    // field.
+                }),
+                separator,
+            ));
+
+            // I'm doing if let on tuples even if I need to match only one parameter, maybe TODO: change that in future
+            let ifelse1 = alloc
+                .text("if let (")
+                .append(
+                    alloc.intersperse(
+                        dependencies
+                            .iter()
+                            .map(|expr| expr.generate_as_pattern(ctx, scope)),
+                        alloc.text(",").append(alloc.line()),
+                    ),
+                )
+                .append(") = (")
+                .append(alloc.intersperse(
+                    ty.dependencies.iter().map(|symbol| {
+                        alloc
+                            .text("&")
+                            .append(dependencies_param.clone())
+                            .append(".")
+                            .append(symbol.clone().generate_as_field_name(ctx, scope))
+                            .append(".")
+                            .append("body")
+                    }),
+                    alloc.text(",").append(alloc.line()),
                 ))
-                .append(BoxDoc::text(") -> Result<Self, ConstructorError> {"))
-                .append(BoxDoc::line())
-                .append(body)
-                .append(BoxDoc::text("}"))
+                .append(" {")
+                .append(ifelse2.append(alloc.hardline()).nest(NEST_UNIT))
+                .append("} else {")
+                .append(
+                    Self::generate_constructor_error(ctx, scope)
+                        .append(alloc.hardline())
+                        .nest(NEST_UNIT),
+                )
+                .append("}");
+
+            let body_var = identifiers::Variable::from_name("body".to_owned()).generate(ctx, scope);
+
+            let constructor_body = alloc
+                .text("let ")
+                .append(body_var.clone())
+                .append(" = ")
+                .append(ifelse1)
+                .append("?;")
+                .append(alloc.hardline())
+                .append("Ok(deps::Message { body: ")
+                .append(body_var)
+                .append(", dependencies: ")
+                .append(dependencies_param)
+                .append(" })")
+                .into_doc();
+
+            alloc
+                .text(format!("pub fn",))
+                .append(constructor_name)
+                .append("(")
+                .append(alloc.intersperse(params, alloc.text(", ")))
+                .append(") -> Result<Self, deps::ConstructorError> {")
+                .append(constructor_body.nest(NEST_UNIT))
+                .into_doc()
         }
 
-        fn generate_constructor_body(
-            &self,
-            context: CodegenContext<'a>,
-            scope: &mut NamingScope<'_>,
+        fn generate_constructor_error(
+            ctx: CodegenContext<'a>,
+            _: &mut NamingScope<'_>,
         ) -> BoxDoc<'a> {
-            let alloc = context.alloc;
-
-            let body_var = Identifier::variable("body".to_owned()).generate(context, scope);
-
-            alloc.text("let ").append(body_var).into_doc()
+            ctx.alloc
+                .text("Err(deps::ConstructorError::MismatchedDependencies)")
+                .into_doc()
         }
     }
 
     impl<'a> Expression {
-        pub fn generate_as_pattern(&self, context: CodegenContext<'a>, scope: &mut NamingScope<'_>) -> BoxDoc<'a> {
-            todo!()
+        pub fn generate_as_pattern(
+            &self,
+            ctx: CodegenContext<'a>,
+            scope: &mut NamingScope<'_>,
+        ) -> BoxDoc<'a> {
         }
     }
 }
 
-impl<'a> Symbol {
-    pub fn generate_declaration(
+mod value_from_expression {
+    use std::iter;
+
+    use super::ast::{Constructor, Expression};
+    use super::identifiers::{self, Identifier};
+    use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, NEST_UNIT};
+
+    impl<'a> Expression {
+        pub(super) fn generate_as_value(
+            &self,
+            ctx: CodegenContext<'a>,
+            scope: &mut NamingScope<'a>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+            match self {
+                Expression::OpCall(op_call) => todo!(),
+                Expression::Type { call, dependencies } => todo!(),
+                Expression::Constructor {
+                    call,
+                    implicits,
+                    arguments,
+                } => {
+                    let (constructor, provided_deps, arguments) = if let Expression::Constructor {
+                        call,
+                        implicits,
+                        arguments,
+                    } = self
+                    {
+                        (
+                            call.upgrade().expect("call to unknown constructor"),
+                            implicits,
+                            arguments,
+                        )
+                    } else {
+                        panic!("expected constructor call expression")
+                    };
+                    let dependencies = alloc.text();
+                    alloc.text(ty.name.clone()).into_doc()
+                }
+                Expression::Variable(weak) => todo!(),
+            }
+        }
+    }
+
+    impl<'a> Constructor {
+        fn generate_call_as_value(
+            &self,
+            ctx: CodegenContext<'a>,
+            scope: &mut NamingScope<'a>,
+            implicits: Vec<Expression>,
+            arguments: Vec<Expression>,
+        ) -> BoxDoc<'a> {
+            assert!(arguments.len() == self.fields.len());
+
+            let alloc = ctx.alloc;
+            
+            let (ty, type_deps) = self.split_return_type();
+            let dependencies = type_deps
+                .iter()
+                .map(|expr| expr.generate_as_value(ctx, scope))
+                .collect();
+            let deps_module = identifiers::Module::from_name("deps".to_owned())
+                .get_generated(ctx, scope)
+                .expect("missing deps module");
+
+            let mut deps_scope = NamingScope::nested_in(scope);
+            let constructor_call = deps_module
+                .clone()
+                .append("::")
+                // TODO: this is bad, because it avoids identifier::Type get_generated. The reason why it avoids is following:
+                // current NamingScope is stack-based, meaning that you have access only to the current stack of the names.
+                // But deps is separate module, so it was already popped from NamingScope stack. So in current model desired
+                // behavior can't be achieved.
+                // Also, there is an additional argument against naming scope in its current form: such stack-based behavior is only
+                // natural to the Variables. But it is completely unnatural to the Modules, Types and Functions. Meaning, there should
+                // be another more suitable abstraction for them.
+                .append(
+                    identifiers::Type::from_name(ty.name.clone())
+                        .try_generate(ctx, &mut deps_scope)
+                        .expect("impossible"),
+                )
+                .append("::")
+                // TODO: same to what written above
+                .append(
+                    identifiers::Function::from_name(self.name.clone())
+                        .try_generate(ctx, &mut deps_scope)
+                        .expect("impossible"),
+                );
+            let dependencies_struct = deps_module
+                .append("::")
+                // TODO: same to what written above.
+                .append(
+                    identifiers::Module::from_name(ty.name.clone())
+                        .try_generate(ctx, &mut deps_scope)
+                        .expect("impossible"),
+                )
+                .append("::")
+                .append(ty.generate_type_dependencies_struct(ctx, scope, dependencies));
+
+            constructor_call
+                .append("(")
+                .append(alloc.intersperse(
+                    iter::once(dependencies_struct).chain(
+                        arguments.
+                    ),
+                    alloc.text(",").append(alloc.line()),
+                ))
+                .append(")")
+        }
+    }
+}
+
+impl<'a> Constructor {
+    pub fn generate_constructor_name(
         &self,
-        context: CodegenContext<'a>,
+        ctx: CodegenContext<'a>,
         scope: &mut NamingScope<'_>,
     ) -> BoxDoc<'a> {
-        todo!()
+        identifiers::Function::from_name(self.name.clone())
+            .try_generate(ctx, scope)
+            .expect("failed to generate constructor name")
+    }
+}
+
+impl<'a> Symbol {
+    pub fn generate_as_field_declaration(
+        self: Rc<Self>,
+        ctx: CodegenContext<'a>,
+        scope: &mut NamingScope<'_>,
+    ) -> BoxDoc<'a> {
+        let name = identifiers::Variable::from_symbol(self.clone()).generate(ctx, scope);
+        let ty = self.ty.generate_type_expression(ctx, scope);
+        name.append(": ").append(ty)
+    }
+}
+
+impl<'a> Symbol {
+    pub fn generate_as_field_name(
+        self: Rc<Self>,
+        ctx: CodegenContext<'a>,
+        scope: &mut NamingScope<'_>,
+    ) -> BoxDoc<'a> {
+        identifiers::Variable::from_symbol(self.clone()).generate(ctx, scope)
     }
 }
 
 impl<'a> Expression {
     pub fn generate_type_expression(
         &self,
-        context: CodegenContext<'a>,
+        ctx: CodegenContext<'a>,
         scope: &mut NamingScope<'_>,
     ) -> BoxDoc<'a> {
-        todo!()
+        match self {
+            Expression::OpCall(_) => panic!("OpCall in type expression"),
+            Expression::Type {
+                call,
+                dependencies: _,
+            } => {
+                // dependencies are runtime so they are not relevant in call
+                call.upgrade()
+                    .expect("call to unknown type")
+                    .generate_comptime_type(ctx, scope)
+            }
+            Expression::Constructor {
+                call: _,
+                implicits: _,
+                arguments: _,
+            } => panic!("Constructor in type expression"),
+            Expression::Variable(_) => panic!("Variable in type expression"),
+        }
     }
 }

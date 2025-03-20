@@ -146,7 +146,7 @@ mod vec {
             val: u64,
             tail: Self,
         ) -> Result<Self, deps::ConstructorError> {
-            let body = if let deps::nat::Body::Suc { pred } = &dependencies.n.body {
+            let body = if let (deps::nat::Body::Suc { pred }) = (&dependencies.n.body) {
                 if tail.dependencies.n.body == **pred {
                     Ok(Body::Cons {
                         val,
