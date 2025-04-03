@@ -1,5 +1,5 @@
-use crate::ast::{elaborated, operators::OpCall};
 use super::scope::Scope;
+use crate::ast::{elaborated, operators};
 use std::rc::{Rc, Weak};
 
 type Str = String; // Temporary
@@ -11,15 +11,15 @@ type ElaboratedModule = elaborated::Module<Str>;
 type ElaboratedContext = elaborated::Context<Str>;
 type ElaboratedConstructor = elaborated::Constructor<Str>;
 
-// This implementation has one huge downside: 
-// It uses Rc and Weak in order to have references to associated objects smarter then strings (which also requires 
-// global hashmap). For example codegen::ast::Expression::Constructor stores weak reference to the corresponding 
-// codegen::ast::Constructor while ast::elaborated::Expression::Constructor stores just the name of the constructor 
+// This implementation has one huge downside:
+// It uses Rc and Weak in order to have references to associated objects smarter then strings (which also requires
+// global hashmap). For example codegen::ast::Expression::Constructor stores weak reference to the corresponding
+// codegen::ast::Constructor while ast::elaborated::Expression::Constructor stores just the name of the constructor
 // which then must be located in constructor list
 //
-// Current implementation is not aware that whole ast has one lifetime, and any smart pointer deref should 
+// Current implementation is not aware that whole ast has one lifetime, and any smart pointer deref should
 // return one common lifetime.
-// 
+//
 // TODO: So at some point I want to rewrite this to custom indices wrapper that are aware of lifetime.
 // Until that point I must clone in some places in order to please Rust gods.
 
@@ -56,9 +56,11 @@ pub struct Constructor {
     pub result_type: TypeExpression,
 }
 
+pub type OpCall = operators::OpCall<Str, Box<Expression>>;
+
 #[derive(Clone)]
 pub enum Expression {
-    OpCall(OpCall<Str, Box<Expression>>),
+    OpCall(OpCall),
     Type {
         call: Weak<Type>,
         dependencies: Vec<Expression>,
@@ -158,7 +160,7 @@ impl Module {
 }
 
 impl Constructor {
-    pub fn from_elaborated<'a>(
+    fn from_elaborated<'a>(
         type_context: ASTContext<'a>,
         name: Str,
         ElaboratedConstructor {
@@ -237,12 +239,15 @@ impl Expression {
         match expr {
             ElaboratedExpression::OpCall(op_call) => {
                 let op_call = match op_call {
-                    OpCall::Literal(literal) => OpCall::Literal(literal),
-                    OpCall::Unary(unary_op, expr) => OpCall::Unary(
+                    operators::OpCall::Literal(literal) => OpCall::Literal(literal),
+                    // TODO: UnaryOp::Access must be Symbol, not string. But in order to locate this symbol I need to traverse
+                    // message fields tree and find it. This can be done nicely when proper scope visibility determiner will be implemented
+                    // for now tho this is NOT HUGE problem as fields mostly are generated quite trivially.
+                    operators::OpCall::Unary(unary_op, expr) => OpCall::Unary(
                         unary_op,
                         Box::new(Self::from_elaborated(context, (*expr).clone())),
                     ),
-                    OpCall::Binary(binary_op, lhs, rhs) => OpCall::Binary(
+                    operators::OpCall::Binary(binary_op, lhs, rhs) => OpCall::Binary(
                         binary_op,
                         Box::new(Self::from_elaborated(context, (*lhs).clone())),
                         Box::new(Self::from_elaborated(context, (*rhs).clone())),

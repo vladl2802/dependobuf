@@ -71,7 +71,7 @@ where
     }
 }
 
-struct FlatIter<'a, Key, Value>
+pub struct FlatIter<'a, Key, Value>
 where
     Key: Hash + Eq,
 {
@@ -89,7 +89,7 @@ where
     }
 }
 
-struct FlatIntoIter<Key, Value>
+pub struct FlatIntoIter<Key, Value>
 where
     Key: Hash + Eq,
 {
@@ -107,7 +107,7 @@ where
     }
 }
 
-struct RecurseIter<'a, Key, Value>
+pub struct RecurseIter<'a, Key, Value>
 where
     Key: Hash + Eq,
 {
