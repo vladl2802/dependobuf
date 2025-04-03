@@ -4,7 +4,7 @@ mod identifiers;
 mod object_id;
 mod scope;
 
-mod sample;
+mod samples;
 
 use pretty::{BoxAllocator, BoxDoc, DocAllocator};
 
