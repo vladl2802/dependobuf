@@ -1,9 +1,6 @@
-use super::identifiers::{Formattable, Tag};
+use super::identifiers::Tag;
 use std::{
-    collections::{
-        hash_map::{self, Entry},
-        HashMap,
-    },
+    collections::{hash_map, HashMap},
     hash::Hash,
 };
 
@@ -151,64 +148,33 @@ where
 /// So, NamingScope responsible for given identifier formatter unique tag.
 pub struct TaggerScope<'a, Value>
 where
-    Value: Formattable + Hash + Eq + 'a,
+    Value: Hash + Eq,
 {
-    tagger: Scope<'a, String, Tag>,
-    scope: Scope<'a, Value, Tag>,
+    tagger: Scope<'a, Value, Tag>,
 }
 
 impl<'a, Value> TaggerScope<'a, Value>
 where
-    Value: Formattable + Hash + Eq,
+    Value: Hash + Eq,
 {
     pub fn empty() -> Self {
         TaggerScope {
             tagger: Scope::empty(),
-            scope: Scope::empty(),
         }
     }
 
     pub fn nested_in(parent: &'a TaggerScope<'a, Value>) -> Self {
         TaggerScope {
             tagger: Scope::nested_in(&parent.tagger),
-            scope: Scope::nested_in(&parent.scope),
         }
     }
 
     pub fn contains(&self, value: &Value) -> bool {
-        self.scope.contains(value)
+        self.tagger.contains(value)
     }
 
-    pub fn get(&self, value: &Value) -> Option<Tag> {
-        self.scope.get(value).copied()
-    }
-
-    pub fn try_insert(&mut self, value: Value) -> Option<Tag> {
-        let string = value.format();
-        if self.tagger.contains(&string) {
-            None
-        } else {
-            let tag = Tag::default();
-            assert!(
-                self.tagger.try_insert(string, tag),
-                "tagger contain and try_insert contradict"
-            );
-            assert!(
-                self.scope.try_insert(value, tag),
-                "tagger try_insert succeed but scope try_insert failed"
-            );
-            Some(tag)
-        }
-    }
-
-    /// If value was already inserted does nothing and returns stored for it tag
     pub fn insert(&mut self, value: Value) -> Tag {
-        let string = value.format();
-        let vacant = match self.scope.map.entry(value) {
-            Entry::Occupied(occupied) => return occupied.get().clone(),
-            Entry::Vacant(vacant) => vacant,
-        };
-        let tag = match self.tagger.map.entry(string) {
+        match self.tagger.map.entry(value) {
             hash_map::Entry::Occupied(mut occupied) => {
                 let tag = occupied.get().inc();
                 occupied.insert(tag.clone());
@@ -225,8 +191,6 @@ where
                 vacant.insert(tag.clone());
                 tag
             }
-        };
-        vacant.insert(tag);
-        tag
+        }
     }
 }

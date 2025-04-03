@@ -1,11 +1,11 @@
 mod ast;
 mod codegen;
-mod scope;
 mod identifiers;
+mod object_id;
+mod scope;
 
 mod sample;
 
-use scope::Scope;
-use pretty::{BoxDoc, BoxAllocator, DocAllocator};
+use pretty::{BoxAllocator, BoxDoc, DocAllocator};
 
 const NEST_UNIT: isize = 4;

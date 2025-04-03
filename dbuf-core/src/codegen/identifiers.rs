@@ -1,7 +1,11 @@
-use super::{ast, codegen::CodegenContext, scope::TaggerScope, BoxDoc, DocAllocator};
-use std::{fmt::Display, hash::Hash, rc::Rc};
+use super::{
+    codegen::CodegenContext,
+    object_id::ObjectId,
+    scope::{Scope, TaggerScope},
+    BoxDoc, DocAllocator,
+};
 
-// TODO: make format apply naming conventions depending on identifier kind
+use std::fmt::Display;
 
 // TODO: This is struct not accurate representation of the name scopes
 // for example in following code snippet
@@ -12,32 +16,49 @@ use std::{fmt::Display, hash::Hash, rc::Rc};
 // module a::b do not conflict with module b, but current implementation does not aware
 // I'm not sure how to implement such behavior, so it's huge TODO
 
-// TODO: for now identifiers here are strongly connected with format in which I generate code
-// for example identifier::Type can be constructed from ast::Type or just from name
-// But in future I want to also be able to for example generate identifier::Module from just the ast::Type.
-// More precisely, I want to have connection between generated identifiers and what I generate. 
-// At current stand point I see this connection as HashMap<ObjectId, Box<dyn Identifier>> where ObjectId is broadly 
-// speaking unique id that differentiates different ast objects (such as types, constructors, even fields maybe).
-
-pub struct NamingScope<'a> {
-    pub variables: TaggerScope<'a, Variable>,
-    pub functions: TaggerScope<'a, Function>,
-    pub modules: TaggerScope<'a, Module>,
-    pub types: TaggerScope<'a, Type>,
+pub struct NamingScope<'a, 'b> {
+    pub generated: Scope<'a, ObjectId<'a>, BoxDoc<'b>>,
+    pub tagger: TaggerScope<'a, String>,
 }
 
-impl<'a> NamingScope<'a> {
-    pub fn nested_in(parent: &'a NamingScope<'a>) -> Self {
+impl<'a, 'b> NamingScope<'a, 'b> {
+    pub fn empty() -> Self {
         NamingScope {
-            variables: TaggerScope::nested_in(&parent.variables),
-            functions: TaggerScope::nested_in(&parent.functions),
-            modules: TaggerScope::nested_in(&parent.modules),
-            types: TaggerScope::nested_in(&parent.types),
+            generated: Scope::empty(),
+            tagger: TaggerScope::empty(),
+        }
+    }
+
+    pub fn nested_in(parent: &'a NamingScope<'a, 'b>) -> Self {
+        NamingScope {
+            generated: Scope::nested_in(&parent.generated),
+            tagger: TaggerScope::nested_in(&parent.tagger),
         }
     }
 }
 
-#[derive(Clone, Copy, Default)]
+pub fn get_generated<'a, 'b>(
+    _: CodegenContext<'a>,
+    scope: &NamingScope<'b, 'a>,
+    object_id: ObjectId<'b>,
+) -> Option<BoxDoc<'a>> {
+    scope.generated.get(&object_id).cloned()
+}
+
+pub fn try_generate_bind<'a, 'b>(
+    _: CodegenContext<'a>,
+    scope: &mut NamingScope<'b, 'a>,
+    object_id: ObjectId<'b>,
+    doc: BoxDoc<'a>,
+) -> Option<BoxDoc<'a>> {
+    if scope.generated.try_insert(object_id, doc.clone()) {
+        Some(doc)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tag(u32);
 
 impl Tag {
@@ -52,237 +73,95 @@ impl Display for Tag {
     }
 }
 
-// maybe make result type generic
-pub trait Formattable {
+pub trait Identifier<'a, 'b> {
+    // TODO: replace string to more appropriate type that is close to pretty::Doc and supports Eq and Hash
     fn format(&self) -> String;
-}
 
-pub trait Identifier<'a, 'c>
-where
-    Self: Formattable + Clone + Hash + PartialEq + Eq + 'c,
-{
     fn tag_format(&self, tag: Tag) -> String;
 
-    fn my_scope<'b>(scope: &'b mut NamingScope<'c>) -> &'b mut TaggerScope<'c, Self>;
+    fn object_id(&self) -> ObjectId<'b>;
 
     /// Tries to generate Identifier without adding tag.
     fn try_generate(
         &self,
         ctx: CodegenContext<'a>,
-        scope: &mut NamingScope<'c>,
+        scope: &mut NamingScope<'b, 'a>,
     ) -> Option<BoxDoc<'a>> {
-        if let Some(tag) = Self::my_scope(scope).try_insert(self.clone()) {
-            Some(ctx.alloc.text(self.tag_format(tag)).into_doc())
-        } else {
+        let formatted = self.format();
+        if scope.tagger.contains(&formatted) {
             None
-        }
-    }
-
-    fn generate(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'c>) -> BoxDoc<'a> {
-        let tag = Self::my_scope(scope).insert(self.clone());
-        ctx.alloc.text(self.tag_format(tag)).into_doc()
-    }
-
-    fn try_generate_substituted(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'c>, with: BoxDoc<'a>) -> BoxDoc<'a> {
-
-    }
-
-    fn get_generated(
-        &self,
-        ctx: CodegenContext<'a>,
-        scope: &mut NamingScope<'c>,
-    ) -> Option<BoxDoc<'a>> {
-        Self::my_scope(scope)
-            .get(&self)
-            .map(|tag| ctx.alloc.text(self.tag_format(tag)).into_doc())
-    }
-}
-
-#[derive(Clone)]
-enum VariableBase {
-    Symbol(Rc<ast::Symbol>),
-    String(String),
-}
-
-impl Hash for VariableBase {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            VariableBase::Symbol(symbol) => Rc::as_ptr(symbol).hash(state),
-            VariableBase::String(string) => string.hash(state),
-        }
-    }
-}
-
-impl PartialEq for VariableBase {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Symbol(lhs), Self::Symbol(rhs)) => Rc::ptr_eq(lhs, rhs),
-            (Self::String(lhs), Self::String(rhs)) => lhs == rhs,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for VariableBase {}
-
-// needed because enum variants are public to the user
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Variable(VariableBase);
-
-impl Variable {
-    pub fn from_symbol(symbol: Rc<ast::Symbol>) -> Self {
-        Variable(VariableBase::Symbol(symbol))
-    }
-
-    pub fn from_name(name: String) -> Self {
-        Variable(VariableBase::String(name))
-    }
-}
-
-impl Formattable for Variable {
-    fn format(&self) -> String {
-        match &self.0 {
-            VariableBase::Symbol(symbol) => symbol.name.clone(),
-            VariableBase::String(string) => string.clone(),
-        }
-    }
-}
-
-impl<'a, 'c> Identifier<'a, 'c> for Variable {
-    fn tag_format(&self, tag: Tag) -> String {
-        if tag.0 > 0 {
-            format!("{}_{}", self.format(), tag)
         } else {
-            self.format()
+            let tag = scope.tagger.insert(formatted.clone());
+            assert!(tag == Tag::default(), "expect tag zero value");
+            let generated = ctx.alloc.text(formatted).into_doc();
+            assert!(
+                scope
+                    .generated
+                    .try_insert(self.object_id(), generated.clone()),
+                "identifier with provided ObjectId already exists even so it was not tagged before"
+            );
+            Some(generated)
         }
     }
 
-    fn my_scope<'b>(scope: &'b mut NamingScope<'c>) -> &'b mut TaggerScope<'c, Self> {
-        &mut scope.variables
+    fn generate(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'b, 'a>) -> BoxDoc<'a> {
+        let tag = scope.tagger.insert(self.format());
+        let generated = ctx.alloc.text(self.tag_format(tag)).into_doc();
+        assert!(
+            scope
+                .generated
+                .try_insert(self.object_id(), generated.clone()),
+            "object with provided ObjectId was already generated"
+        );
+        generated
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Function {
-    name: String,
-}
+// TODO: make format apply naming conventions depending on identifier kind
 
-impl Function {
-    pub fn from_name(name: String) -> Self {
-        Function { name }
-    }
-}
-
-impl Formattable for Function {
-    fn format(&self) -> String {
-        self.name.clone()
-    }
-}
-
-impl<'a, 'c> Identifier<'a, 'c> for Function {
-    fn tag_format(&self, tag: Tag) -> String {
-        if tag.0 > 0 {
-            format!("{}_{}", self.format(), tag)
-        } else {
-            self.format()
+macro_rules! declare_identifier {
+    ($name:ident) => {
+        pub struct $name<'a> {
+            object_id: ObjectId<'a>,
+            name: String,
         }
-    }
 
-    fn my_scope<'b>(scope: &'b mut NamingScope<'c>) -> &'b mut TaggerScope<'c, Self> {
-        &mut scope.functions
-    }
-}
+        impl<'a> $name<'a> {
+            pub fn from_object(object_id: ObjectId<'a>, name: String) -> Self {
+                Self { object_id, name }
+            }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Module {
-    name: String,
-}
-
-impl Module {
-    pub fn from_name(name: String) -> Self {
-        Module { name }
-    }
-}
-
-impl Formattable for Module {
-    fn format(&self) -> String {
-        self.name.clone()
-    }
-}
-
-impl<'a, 'c> Identifier<'a, 'c> for Module {
-    fn tag_format(&self, tag: Tag) -> String {
-        if tag.0 > 0 {
-            format!("{}_{}", self.format(), tag)
-        } else {
-            self.format()
+            pub fn from_name(name: String) -> Self {
+                Self {
+                    object_id: ObjectId::Owned { name: name.clone() },
+                    name,
+                }
+            }
         }
-    }
 
-    fn my_scope<'b>(scope: &'b mut NamingScope<'c>) -> &'b mut TaggerScope<'c, Self> {
-        &mut scope.modules
-    }
-}
+        impl<'a, 'b> Identifier<'a, 'b> for $name<'b> {
+            fn format(&self) -> String {
+                // TODO: add r# or mandatory tag if ident is keyword
+                self.name.clone()
+            }
 
-#[derive(Clone)]
-enum TypeBase {
-    Type(Rc<ast::Type>),
-    String(String),
-}
+            fn tag_format(&self, tag: Tag) -> String {
+                if tag.0 > 0 {
+                    // here naming conventions must be applied
+                    format!("{}_{}", self.format(), tag)
+                } else {
+                    self.format()
+                }
+            }
 
-impl Hash for TypeBase {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            TypeBase::Type(ty) => Rc::as_ptr(ty).hash(state),
-            TypeBase::String(string) => string.hash(state),
+            fn object_id(&self) -> ObjectId<'b> {
+                self.object_id.clone()
+            }
         }
-    }
+    };
 }
 
-impl PartialEq for TypeBase {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Type(lhs), Self::Type(rhs)) => Rc::ptr_eq(lhs, rhs),
-            (Self::String(lhs), Self::String(rhs)) => lhs == rhs,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for TypeBase {}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Type(TypeBase);
-
-impl Type {
-    pub fn from_type(ty: Rc<ast::Type>) -> Self {
-        Type(TypeBase::Type(ty))
-    }
-
-    pub fn from_name(name: String) -> Self {
-        Type(TypeBase::String(name))
-    }
-}
-
-impl Formattable for Type {
-    fn format(&self) -> String {
-        match &self.0 {
-            TypeBase::Type(ty) => ty.name.clone(),
-            TypeBase::String(string) => string.clone(),
-        }
-    }
-}
-
-impl<'a, 'c> Identifier<'a, 'c> for Type {
-    fn tag_format(&self, tag: Tag) -> String {
-        if tag.0 > 0 {
-            format!("{}{}", self.format(), tag)
-        } else {
-            self.format()
-        }
-    }
-
-    fn my_scope<'b>(scope: &'b mut NamingScope<'c>) -> &'b mut TaggerScope<'c, Self> {
-        &mut scope.types
-    }
-}
+declare_identifier! {Variable}
+declare_identifier! {Function}
+declare_identifier! {Module}
+declare_identifier! {Type}
