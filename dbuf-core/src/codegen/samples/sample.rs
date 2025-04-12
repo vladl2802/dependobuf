@@ -95,15 +95,17 @@ pub mod nat {
 
     // inherit implementation with all constructors
     impl Nat {
-        pub fn zero(dependencies: Dependencies) -> Result<Self, ConstructorError> {
+        pub fn zero() -> Result<Self, ConstructorError> {
             let body = Body::Zero;
+            let dependencies = Dependencies {};
             Ok(Message { body, dependencies })
         }
 
-        pub fn suc(dependencies: Dependencies, pred: Nat) -> Result<Self, ConstructorError> {
+        pub fn suc(pred: Nat) -> Result<Self, ConstructorError> {
             let body = Body::Suc {
                 pred: Box::new(pred.body),
             };
+            let dependencies = Dependencies {};
             Ok(Message { body, dependencies })
         }
     }
@@ -136,9 +138,10 @@ pub use nat::Nat;
 //             fields: Vec::new(),
 //             result_type: Expression::Type {
 //                 name: "Vec".to_owned(),
-//                 dependencies: Rec::new([Expression::Type {
-//                     name: "Nat".to_owned(),
-//                     dependencies: Rec::new([])
+//                 dependencies: Rec::new([Expression::Constructor {
+//                     name: "Zero".to_owned(),
+//                     implicits: Rec::new([]),
+//                     arguments: Rec::new([])
 //                 }]),
 //             },
 //         },
@@ -205,36 +208,28 @@ pub mod vec {
     pub type Vec = deps::Message<Body, Dependencies>;
 
     impl Vec {
-        pub fn nil(dependencies: Dependencies) -> Result<Self, deps::ConstructorError> {
-            let body = if let (deps::nat::Body::Zero) = (&dependencies.n.body) {
-                if () == () {
-                    Ok(Body::Nil)
-                } else {
-                    Err(deps::ConstructorError::MismatchedDependencies)
-                }
+        pub fn nil() -> Result<Self, deps::ConstructorError> {
+            let body = if () == () {
+                Ok(Body::Nil)
             } else {
                 Err(deps::ConstructorError::MismatchedDependencies)
             }?;
+            let dependencies = Dependencies {
+                n: deps::Nat::zero()?,
+            };
             Ok(deps::Message { body, dependencies })
         }
 
-        pub fn cons(
-            dependencies: Dependencies,
-            val: u64,
-            tail: Self,
-        ) -> Result<Self, deps::ConstructorError> {
-            let body = if let (deps::nat::Body::Suc { pred }) = (&dependencies.n.body) {
-                if (tail.dependencies.n.body) == (**pred) {
-                    Ok(Body::Cons {
-                        val,
-                        tail: Box::new(tail.body),
-                    })
-                } else {
-                    Err(deps::ConstructorError::MismatchedDependencies)
-                }
+        pub fn cons(p: deps::Nat, val: u64, tail: Self) -> Result<Self, deps::ConstructorError> {
+            let body = if (tail.dependencies.n) == (p) {
+                Ok(Body::Cons {
+                    val,
+                    tail: Box::new(tail.body),
+                })
             } else {
                 Err(deps::ConstructorError::MismatchedDependencies)
             }?;
+            let dependencies = Dependencies { n: p };
             Ok(deps::Message { body, dependencies })
         }
     }

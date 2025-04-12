@@ -23,6 +23,7 @@ impl<'a> ObjectId<'a> {
         ObjectId::Owned { name }
     }
 
+    // TODO: this must be pin in general case. But for now it could work for reference to.
     pub fn id<T>(this: &'a T) -> ObjectId<'a> {
         ObjectId::Pointer {
             pointer: ptr::from_ref(this) as usize,

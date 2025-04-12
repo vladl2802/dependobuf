@@ -369,8 +369,14 @@ impl<'a> Type {
             "not enough/to much values to initialize Dependencies"
         );
         let alloc = ctx.alloc;
-        identifiers::get_generated(ctx, scope, ObjectId::owned("dependencies".to_owned()))
-            .expect("Dependencies struct must be already generated")
+
+        let deps_struct = identifiers::Type::from_name("Dependencies".to_owned())
+            .try_generate(ctx, scope)
+            .expect("could not generate Dependencies struct");
+
+        let mut fields_scope = NamingScope::empty();
+
+        deps_struct
             .append(" {")
             .append(alloc.line())
             .append(
@@ -381,7 +387,7 @@ impl<'a> Type {
                         .map(|(symbol, value)| {
                             symbol
                                 .clone()
-                                .generate_as_field_name(ctx, scope)
+                                .generate_as_field_name(ctx, &mut fields_scope)
                                 .append(": ")
                                 .append(value.clone())
                         }),
@@ -442,50 +448,22 @@ mod type_inherent_impl {
             let mut constructor_scope = NamingScope::nested_in(scope);
             let scope = &mut constructor_scope;
 
-            // order matters because there can be field name "dependencies" and I want to preserve params names
             let params = self
-                .fields
+                .implicits
                 .iter()
-                .map(|symbol| symbol.clone().generate_as_field_name(ctx, scope))
+                .map(|symbol| symbol.clone().generate_as_field_declaration(ctx, scope))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .chain(
+                    self.fields
+                        .iter()
+                        .map(|symbol| symbol.clone().generate_as_field_name(ctx, scope)),
+                )
                 .collect::<Vec<_>>();
-
-            let dependencies_param =
-                identifiers::Variable::from_name("dependencies".to_owned()).generate(ctx, scope);
-
-            let params = iter::once(dependencies_param.clone().append(": ").append(
-                identifiers::get_generated(ctx, scope, ObjectId::owned("Dependencies".to_owned())),
-            ))
-            .chain(params)
-            .collect::<Vec<_>>();
 
             let (ty, dependencies) = self.split_return_type();
 
-            // I'm doing if let on tuples even if I need to match only one parameter, maybe TODO: change that in future
-            let dependencies_checker_if_condition = alloc
-                .text("if let (")
-                .append(
-                    alloc.intersperse(
-                        dependencies
-                            .iter()
-                            .map(|expr| expr.generate_as_pattern(ctx, scope)), // introduces implicits into scope
-                        alloc.text(",").append(alloc.line()),
-                    ),
-                )
-                .append(") = (")
-                .append(alloc.intersperse(
-                    ty.dependencies.iter().map(|symbol| {
-                        alloc
-                            .text("&")
-                            .append(dependencies_param.clone())
-                            .append(".")
-                            .append(symbol.clone().generate_as_field_name(ctx, scope))
-                            .append(".")
-                            .append("body")
-                    }),
-                    alloc.text(",").append(alloc.line()),
-                ));
-
-            let fields_checker_if_condition = alloc
+            let type_checker_if = alloc
                 .text("if (")
                 .append(alloc.intersperse(
                     self.fields.iter().map(|symbol| {
@@ -556,46 +534,34 @@ mod type_inherent_impl {
                 .append(")");
 
             let body_var = identifiers::Variable::from_name("body".to_owned()).generate(ctx, scope);
+            let dependencies_var =
+                identifiers::Variable::from_name("dependencies".to_owned()).generate(ctx, scope);
 
-            let constructor_body = alloc
+            let body_initialization = alloc
                 .text("let ")
                 .append(body_var.clone())
                 .append(" = ")
                 .append(
-                    dependencies_checker_if_condition
+                    type_checker_if
                         .append("{")
                         .append(alloc.hardline())
                         .append(
-                            fields_checker_if_condition
-                                .append("{")
-                                .append(alloc.hardline())
-                                .append(
-                                    self.generate_as_body_construction(
-                                        ctx,
-                                        scope,
-                                        self.fields
-                                            .iter()
-                                            .map(|field| {
-                                                identifiers::get_generated(
-                                                    ctx,
-                                                    scope,
-                                                    ObjectId::id_rc(field),
-                                                )
-                                                .expect("could not find passed field")
-                                            })
-                                            .collect(),
-                                    )
-                                    .nest(NEST_UNIT),
-                                )
-                                .append(alloc.hardline())
-                                .append("} else {")
-                                .append(alloc.hardline())
-                                .append(
-                                    Self::generate_constructor_error(ctx, scope).nest(NEST_UNIT),
-                                )
-                                .append(alloc.hardline())
-                                .append("}")
-                                .nest(NEST_UNIT),
+                            self.generate_as_body_construction(
+                                ctx,
+                                scope,
+                                self.fields
+                                    .iter()
+                                    .map(|field| {
+                                        identifiers::get_generated(
+                                            ctx,
+                                            scope,
+                                            ObjectId::id_rc(field),
+                                        )
+                                        .expect("could not find passed field")
+                                    })
+                                    .collect(),
+                            )
+                            .nest(NEST_UNIT),
                         )
                         .append(alloc.hardline())
                         .append("} else {")
@@ -604,14 +570,43 @@ mod type_inherent_impl {
                         .append(alloc.hardline())
                         .append("}"),
                 )
-                .append("?;")
+                .append("?;");
+
+            let dependencies = dependencies
+                .iter()
+                .map(|expr| expr.generate_as_value(ctx, scope))
+                .collect();
+
+            let deps_module =
+                identifiers::get_generated(ctx, scope, ObjectId::owned("deps".to_owned()))
+                    .expect("missing deps module");
+
+            let mut deps_scope = NamingScope::nested_in(scope);
+
+            let dependencies_initialization = alloc
+                .text("let ")
+                .append(dependencies_var.clone())
+                .append(" = ")
+                .append(deps_module)
+                .append("::")
+                // TODO
+                .append(
+                    identifiers::Module::from_name(ty.name.clone())
+                        .try_generate(ctx, &mut deps_scope)
+                        .expect("impossible"),
+                )
+                .append("::")
+                .append(ty.generate_type_dependencies_struct(ctx, &mut deps_scope, dependencies));
+
+            let constructor_body = body_initialization
+                .append(alloc.hardline())
+                .append(dependencies_initialization)
                 .append(alloc.hardline())
                 .append("Ok(deps::Message { body: ")
                 .append(body_var)
                 .append(", dependencies: ")
-                .append(dependencies_param)
-                .append(" })")
-                .into_doc();
+                .append(dependencies_var)
+                .append(" })");
 
             alloc
                 .text(format!("pub fn",))
@@ -620,6 +615,7 @@ mod type_inherent_impl {
                 .append(alloc.intersperse(params, alloc.text(", ")))
                 .append(") -> Result<Self, deps::ConstructorError> {")
                 .append(constructor_body.nest(NEST_UNIT))
+                .append("}")
                 .into_doc()
         }
 
@@ -631,16 +627,6 @@ mod type_inherent_impl {
             ctx.alloc
                 .text("Err(deps::ConstructorError::MismatchedDependencies)")
                 .into_doc()
-        }
-    }
-
-    impl<'a> Expression {
-        pub fn generate_as_pattern(
-            &self,
-            ctx: CodegenContext<'a>,
-            scope: &mut NamingScope<'_, 'a>,
-        ) -> BoxDoc<'a> {
-            todo!()
         }
     }
 }
@@ -808,11 +794,7 @@ mod value_from_expression {
                         .expect("impossible"),
                 )
                 .append("::")
-                .append(ty.generate_type_dependencies_struct(
-                    ctx,
-                    &mut constructor_scope,
-                    dependencies,
-                ));
+                .append(ty.generate_type_dependencies_struct(ctx, &mut deps_scope, dependencies));
 
             constructor_func
                 .append("(")
