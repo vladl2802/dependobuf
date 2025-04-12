@@ -1,0 +1,8 @@
+[package]
+name = "dbuf-gen"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+dbuf-core.workspace = true
+pretty = "=0.12.3"

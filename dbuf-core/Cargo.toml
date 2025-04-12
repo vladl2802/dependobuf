@@ -2,6 +2,3 @@
 name = "dbuf-core"
 edition = "2021"
 version.workspace = true
-
-[dependencies]
-pretty = "0.12.3"

@@ -1,10 +1,11 @@
 mod ast;
-mod codegen;
+pub mod codegen;
 mod identifiers;
 mod object_id;
 mod scope;
 
 mod samples;
+
 
 use pretty::{BoxAllocator, BoxDoc, DocAllocator};
 

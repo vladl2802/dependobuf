@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use super::{
+    BoxAllocator, BoxDoc, DocAllocator, NEST_UNIT,
     ast::{self, Constructor, Expression, Module, Symbol, Type},
     identifiers::{self, Identifier, NamingScope},
     object_id::ObjectId,
-    BoxAllocator, BoxDoc, DocAllocator, NEST_UNIT,
 };
 
 // TODO: make string here and in ast stored in arena and remove cloning
@@ -67,9 +67,9 @@ impl<'a> Type {
 }
 
 mod type_dependencies_import {
-    use super::ast::{Constructor, Expression, Symbol, Type};
+    use super::ast::{Constructor, Expression, Symbol, Type, operators};
     use super::identifiers::{self, Identifier};
-    use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, NEST_UNIT};
+    use super::{BoxDoc, CodegenContext, DocAllocator, NEST_UNIT, NamingScope};
     use std::{collections::hash_set::HashSet, iter, rc::Rc};
 
     impl<'a> Type {
@@ -155,7 +155,7 @@ mod type_dependencies_import {
         fn expression_dependencies(expr: &Expression) -> HashSet<String> {
             let results = match expr {
                 Expression::OpCall(op_call) => {
-                    use crate::ast::operators::OpCall;
+                    use operators::OpCall;
                     match op_call {
                         OpCall::Literal(_) => vec![], // no deps in literal
                         OpCall::Unary(_, expr) => vec![Self::expression_dependencies(expr)],
@@ -217,7 +217,7 @@ mod type_dependencies_import {
 mod type_declaration {
     use super::ast::{self, Symbol, Type};
     use super::identifiers::{self, Identifier};
-    use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, NEST_UNIT};
+    use super::{BoxDoc, CodegenContext, DocAllocator, NEST_UNIT, NamingScope};
     use std::rc::Rc;
 
     impl<'a> Type {
@@ -414,7 +414,7 @@ impl<'a> Type {
 mod type_inherent_impl {
     use super::ast::{Constructor, Expression, Type};
     use super::identifiers::{self, Identifier};
-    use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, ObjectId, NEST_UNIT};
+    use super::{BoxDoc, CodegenContext, DocAllocator, NEST_UNIT, NamingScope, ObjectId};
     use std::iter;
 
     impl<'a> Type {
@@ -632,7 +632,7 @@ mod type_inherent_impl {
 }
 
 mod value_from_expression {
-    use super::ast::{Constructor, Expression, OpCall};
+    use super::ast::{Constructor, Expression, OpCall, operators};
     use super::identifiers::{self, Identifier};
     use super::{BoxDoc, CodegenContext, DocAllocator, NamingScope, ObjectId};
     use std::iter;
@@ -644,7 +644,7 @@ mod value_from_expression {
             scope: &mut NamingScope<'_, 'a>,
         ) -> BoxDoc<'a> {
             match self {
-                Expression::OpCall(op_call) => op_call.generate_op_as_value(ctx, scope),
+                Expression::OpCall(op_call) => generate_op_as_value(op_call, ctx, scope),
                 Expression::Type {
                     call: _,
                     dependencies: _,
@@ -665,59 +665,57 @@ mod value_from_expression {
         }
     }
 
-    impl<'a> OpCall {
-        fn generate_op_as_value(
-            &self,
-            ctx: CodegenContext<'a>,
-            scope: &mut NamingScope<'_, 'a>,
-        ) -> BoxDoc<'a> {
-            use crate::ast::operators::{BinaryOp, Literal, UnaryOp};
-            let alloc = ctx.alloc;
-            match self {
-                OpCall::Literal(literal) => {
-                    let string = match literal {
-                        Literal::Bool(val) => val.to_string(),
-                        Literal::Double(val) => val.to_string(),
-                        Literal::Int(val) => val.to_string(),
-                        Literal::UInt(val) => val.to_string(),
-                        Literal::Str(val) => val.clone(),
-                    };
-                    alloc.text(string).into_doc()
+    fn generate_op_as_value<'a>(
+        op_call: &OpCall,
+        ctx: CodegenContext<'a>,
+        scope: &mut NamingScope<'_, 'a>,
+    ) -> BoxDoc<'a> {
+        use operators::{BinaryOp, Literal, UnaryOp};
+        let alloc = ctx.alloc;
+        match op_call {
+            OpCall::Literal(literal) => {
+                let string = match literal {
+                    Literal::Bool(val) => val.to_string(),
+                    Literal::Double(val) => val.to_string(),
+                    Literal::Int(val) => val.to_string(),
+                    Literal::UInt(val) => val.to_string(),
+                    Literal::Str(val) => val.clone(),
+                };
+                alloc.text(string).into_doc()
+            }
+            OpCall::Unary(unary_op, operand) => {
+                let operand = operand.generate_as_value(ctx, scope);
+                match unary_op {
+                    UnaryOp::Access(name) => operand.append(
+                        identifiers::Variable::from_object(
+                            ObjectId::owned(name.clone()),
+                            name.clone(),
+                        )
+                        .try_generate(ctx, scope)
+                        .expect("failed to generate field declaration"),
+                    ),
+                    UnaryOp::Minus => ctx.alloc.text("-").append(operand).into_doc(),
+                    UnaryOp::Bang => ctx.alloc.text("!").append(operand).into_doc(),
                 }
-                OpCall::Unary(unary_op, operand) => {
-                    let operand = operand.generate_as_value(ctx, scope);
-                    match unary_op {
-                        UnaryOp::Access(name) => operand.append(
-                            identifiers::Variable::from_object(
-                                ObjectId::owned(name.clone()),
-                                name.clone(),
-                            )
-                            .try_generate(ctx, scope)
-                            .expect("failed to generate field declaration"),
-                        ),
-                        UnaryOp::Minus => ctx.alloc.text("-").append(operand).into_doc(),
-                        UnaryOp::Bang => ctx.alloc.text("!").append(operand).into_doc(),
-                    }
-                }
-                OpCall::Binary(binary_op, lhs, rhs) => {
-                    let op = match binary_op {
-                        BinaryOp::Plus => alloc.text("+"),
-                        BinaryOp::Minus => alloc.text("-"),
-                        BinaryOp::Star => alloc.text("*"),
-                        BinaryOp::Slash => alloc.text("/"),
-                        BinaryOp::And => alloc.text("&"),
-                        BinaryOp::Or => alloc.text("|"),
-                    };
-                    alloc
-                        .text("(")
-                        .append(lhs.generate_as_value(ctx, scope))
-                        .append(alloc.space())
-                        .append(op)
-                        .append(alloc.space())
-                        .append(rhs.generate_as_value(ctx, scope))
-                        .append(")")
-                        .into_doc()
-                }
+            }
+            OpCall::Binary(binary_op, lhs, rhs) => {
+                let op = match binary_op {
+                    BinaryOp::Plus => alloc.text("+"),
+                    BinaryOp::Minus => alloc.text("-"),
+                    BinaryOp::Star => alloc.text("*"),
+                    BinaryOp::Slash => alloc.text("/"),
+                    BinaryOp::And => alloc.text("&"),
+                    BinaryOp::Or => alloc.text("|"),
+                };
+                alloc
+                    .text("(")
+                    .append(lhs.generate_as_value(ctx, scope))
+                    .append(alloc.space())
+                    .append(op)
+                    .append(alloc.space())
+                    .append(rhs.generate_as_value(ctx, scope))
+                    .append(")")
+                    .into_doc()
             }
         }
     }

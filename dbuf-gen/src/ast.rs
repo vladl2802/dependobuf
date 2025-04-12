@@ -1,6 +1,7 @@
 use super::scope::Scope;
-use crate::ast::{elaborated, operators};
 use std::rc::{Rc, Weak};
+
+pub use dbuf_core::ast::{elaborated, operators};
 
 type Str = String; // Temporary
 
@@ -180,8 +181,6 @@ impl Constructor {
                 symbol
             })
             .collect();
-
-        let all_params = all_params;
 
         let constructor_context = ASTContext {
             types: type_context.types,
