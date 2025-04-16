@@ -1,8 +1,8 @@
 use super::{
+    BoxDoc, DocAllocator,
     codegen::CodegenContext,
     object_id::ObjectId,
     scope::{Scope, TaggerScope},
-    BoxDoc, DocAllocator,
 };
 
 use std::fmt::Display;
@@ -16,6 +16,7 @@ use std::fmt::Display;
 // module a::b do not conflict with module b, but current implementation does not aware
 // I'm not sure how to implement such behavior, so it's huge TODO
 
+#[derive(Debug)]
 pub struct NamingScope<'a, 'b> {
     pub generated: Scope<'a, ObjectId<'a>, BoxDoc<'b>>,
     pub tagger: TaggerScope<'a, String>,
@@ -58,7 +59,7 @@ pub fn try_generate_bind<'a, 'b>(
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tag(u32);
 
 impl Tag {

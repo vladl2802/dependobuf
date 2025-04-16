@@ -190,8 +190,8 @@ pub use nat::Nat;
 
 pub mod vec {
     mod deps {
-        pub use super::super::{nat, Nat};
         pub use super::super::{Box, ConstructorError, Message};
+        pub use super::super::{Nat, nat};
     }
 
     #[derive(PartialEq, Eq)]
@@ -236,3 +236,57 @@ pub mod vec {
 }
 
 use vec::Vec;
+
+mod Nat {
+    mod deps {
+        pub use super::{Box, ConstructorError, Message};
+        pub use super::super::{};
+    }
+    
+    #[derive(PartialEq, Eq)]
+    pub enum Body {
+        Suc {
+            pred: deps::Box<Nat>
+        },
+        Zero {
+        
+        }
+    }
+    
+    #[derive(PartialEq, Eq)]
+    struct Dependencies {
+    
+    }
+    
+    pub type Nat = deps::Message<Body, Dependencies>;
+    
+    pub fn Suc(pred: deps::Box<Nat>) -> Result<Self, deps::ConstructorError> {
+        let body = if (()) == (()) {
+            Ok(Body::Suc {
+                pred: pred
+            })
+        } else {
+            Err(deps::ConstructorError::MismatchedDependencies)
+        }?;
+        let dependencies = deps::Nat::Dependencies {
+        
+        };
+        Ok(deps::Message { body: body, dependencies: dependencies })
+    }
+    pub fn Zero() -> Result<Self, deps::ConstructorError> {
+        let body = if () == () {
+            Ok(Body::Zero {
+            
+            })
+        } else {
+            Err(deps::ConstructorError::MismatchedDependencies)
+        }?;
+        let dependencies = deps::Nat::Dependencies {
+        
+        };
+        Ok(deps::Message { body: body, dependencies: dependencies })
+    }
+}
+
+use Nat::Nat;
+

@@ -1,11 +1,28 @@
-use std::rc::Rc;
+use std::{io, rc::Rc};
 
-use super::{
+use crate::{
     BoxAllocator, BoxDoc, DocAllocator, NEST_UNIT,
     ast::{self, Constructor, Expression, Module, Symbol, Type},
     identifiers::{self, Identifier, NamingScope},
     object_id::ObjectId,
 };
+
+#[derive(Clone, Copy)]
+pub struct CodegenContext<'a> {
+    pub alloc: &'a BoxAllocator,
+}
+
+pub fn generate_module<Writer: io::Write>(
+    module: ast::elaborated::Module<String>,
+    w: &mut Writer,
+) -> io::Result<()> {
+    let allocator = BoxAllocator;
+    let ctx = CodegenContext { alloc: &allocator };
+    let mut scope = NamingScope::empty();
+    let module = ast::Module::from_elaborated(module);
+    let doc = module.generate(ctx, &mut scope);
+    doc.render(40, w)
+}
 
 // TODO: make string here and in ast stored in arena and remove cloning
 
@@ -16,23 +33,9 @@ use super::{
 // TypeDefinitionCodegen::generate(iter: impl Iterator<Item = &Type>, context: CodegenContext<'a>, scope: &NamingScope<'_>) -> impl Iterator<Item = BoxDoc<'a>
 // saving tedious maps that I must write for now
 
-#[derive(Clone, Copy)]
-pub struct CodegenContext<'a> {
-    pub alloc: &'a BoxAllocator,
-}
-
 impl<'a> Module {
     pub fn generate(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'_, 'a>) -> BoxDoc<'a> {
         let alloc = ctx.alloc;
-        let aliases = alloc
-            .text("mod aliases {")
-            .append(alloc.intersperse(
-                [alloc.text("type Box<T> = std::boxed::Box<T>;")],
-                alloc.line(),
-            ))
-            .append("}")
-            .append(alloc.line())
-            .into_doc();
 
         let types = self
             .types
@@ -40,29 +43,55 @@ impl<'a> Module {
             .map(|ty| (*ty).clone().generate(ctx, scope))
             .collect::<Vec<_>>();
 
-        aliases.append(alloc.intersperse(types, alloc.line()))
+        alloc
+            .intersperse(types, alloc.hardline())
+            .append(alloc.hardline())
+            .into_doc()
     }
 }
 
 impl<'a> Type {
     pub fn generate(&self, ctx: CodegenContext<'a>, scope: &mut NamingScope<'_, 'a>) -> BoxDoc<'a> {
-        let prelude =
-            BoxDoc::text("use super::{Box, ConstructorError, Message}").append(BoxDoc::line());
+        let mut type_scope = NamingScope::nested_in(scope);
 
-        let module = BoxDoc::intersperse(
+        let alloc = ctx.alloc;
+
+        let module = alloc.intersperse(
             [
-                prelude,
-                self.generate_dependencies_import(ctx, scope),
-                self.generate_declaration(ctx, scope),
-                self.generate_inherent_impl(ctx, scope),
+                self.generate_dependencies_import(ctx, &mut type_scope),
+                self.generate_declaration(ctx, &mut type_scope),
+                self.generate_inherent_impl(ctx, &mut type_scope),
             ],
-            BoxDoc::line(),
+            alloc.hardline(),
         );
 
-        BoxDoc::text(format!("mod {} {{", self.name))
-            .append(BoxDoc::line())
-            .append(module.nest(NEST_UNIT))
-            .append(BoxDoc::text("}"))
+        alloc
+            .text("pub mod")
+            .append(alloc.space())
+            // TODO: allocate module here
+            .append(self.name.clone().to_lowercase())
+            .append(alloc.space())
+            .append("{")
+            .append(
+                alloc
+                    .hardline()
+                    .append(module)
+                    .nest(NEST_UNIT)
+                    .append(alloc.hardline()),
+            )
+            .append("}")
+            .append(alloc.hardline())
+            .append(alloc.hardline())
+            .append("pub use")
+            .append(alloc.space())
+            // TODO: use allocated module
+            .append(self.name.clone().to_lowercase())
+            .append("::")
+            // TODO: get generate type name
+            .append(self.name.clone())
+            .append(";")
+            .append(alloc.hardline())
+            .into_doc()
     }
 }
 
@@ -94,7 +123,7 @@ mod type_dependencies_import {
                         implicits,
                         fields,
                         result_type,
-                    } = (*constructor.upgrade().expect("missing type constructor")).clone();
+                    } = constructor.as_ref();
                     let implicits = implicits.iter().map(Self::symbol_dependencies);
                     let fields = fields.iter().map(Self::symbol_dependencies);
                     iter::once(Self::expression_dependencies(&result_type))
@@ -111,18 +140,23 @@ mod type_dependencies_import {
 
             dependencies.remove(&*self.name); // don't need to return self name
 
-            let helpers_deps = alloc
-                .text("use super::{Box, ConstructorError, Message};")
-                .into_doc();
+            let helpers_deps =
+                alloc.text("pub use super::super::{Box, ConstructorError, Message};");
 
-            let other_type_deps = alloc
-                .text("use super::super::{")
+            let other_type_deps = if dependencies.is_empty() {
+                alloc.text("// ")
+            } else {
+                alloc.nil()
+            };
+
+            let other_type_deps = other_type_deps
+                .append(alloc.text("pub use super::super::{"))
                 .append(alloc.intersperse(
                     dependencies.into_iter().map(|name| {
                         let ty = identifiers::Type::from_name(name.clone())
                             .try_generate(ctx, scope)
                             .expect("couldn't import dependence");
-                        let module = identifiers::Module::from_name(name.clone())
+                        let module = identifiers::Module::from_name(name.clone().to_lowercase())
                             .try_generate(ctx, scope)
                             .expect("couldn't import dependence");
                         alloc
@@ -134,10 +168,7 @@ mod type_dependencies_import {
                     }),
                     alloc.text(", "),
                 ))
-                .append("};")
-                .append(alloc.line())
-                .append(";")
-                .into_doc();
+                .append("};");
 
             alloc
                 .text("mod ")
@@ -145,10 +176,15 @@ mod type_dependencies_import {
                 .append(" {")
                 .append(
                     alloc
-                        .intersperse([helpers_deps, other_type_deps], alloc.line())
-                        .nest(NEST_UNIT),
+                        .hardline()
+                        .append(
+                            alloc.intersperse([helpers_deps, other_type_deps], alloc.hardline()),
+                        )
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
                 )
                 .append("}")
+                .append(alloc.hardline())
                 .into_doc()
         }
 
@@ -179,7 +215,7 @@ mod type_dependencies_import {
                         .collect()
                 }
                 Expression::Constructor {
-                    call: _, // dependencies of called constructor should not be matter
+                    call: _, // dependencies in called constructor should not matter
                     implicits,
                     arguments,
                 } => implicits
@@ -217,14 +253,14 @@ mod type_dependencies_import {
 mod type_declaration {
     use super::ast::{self, Symbol, Type};
     use super::identifiers::{self, Identifier};
-    use super::{BoxDoc, CodegenContext, DocAllocator, NEST_UNIT, NamingScope};
+    use super::{BoxDoc, CodegenContext, DocAllocator, NEST_UNIT, NamingScope, ObjectId};
     use std::rc::Rc;
 
-    impl<'a> Type {
+    impl<'a, 'b> Type {
         pub(super) fn generate_declaration(
-            &self,
+            &'b self,
             ctx: CodegenContext<'a>,
-            scope: &mut NamingScope<'_, 'a>,
+            scope: &mut NamingScope<'b, 'a>,
         ) -> BoxDoc<'a> {
             let alloc = ctx.alloc;
 
@@ -236,11 +272,11 @@ mod type_declaration {
                 .append(self.generate_comptime_type(ctx, scope))
                 // deps module provided by type_dependencies_import
                 .append(" = deps::Message<Body, Dependencies>;")
-                .append(BoxDoc::line())
+                .append(alloc.hardline())
                 .into_doc();
 
             alloc
-                .intersperse([body, dependencies, name_alias], alloc.line())
+                .intersperse([body, dependencies, name_alias], alloc.hardline())
                 .into_doc()
         }
 
@@ -269,10 +305,11 @@ mod type_declaration {
                         self.constructors.len() == 1,
                         "Message expected to have only one constructor"
                     );
-                    let constructor = self.constructors[0]
-                        .upgrade()
-                        .expect("missing type constructor");
-                    alloc.intersperse(generate_fields(&constructor.fields, scope), alloc.line())
+                    let constructor = self.constructors[0].as_ref();
+                    alloc.intersperse(
+                        generate_fields(&constructor.fields, scope),
+                        alloc.hardline(),
+                    )
                 }
                 ast::TypeKind::Enum => {
                     let mut branch_scope = NamingScope::nested_in(&scope);
@@ -281,8 +318,7 @@ mod type_declaration {
                         self.constructors
                             .iter()
                             .map(|constructor| {
-                                let constructor =
-                                    &*constructor.upgrade().expect("missing type constructor");
+                                let constructor = constructor.as_ref();
                                 let fields = generate_fields(&constructor.fields, scope);
                                 // TODO: that's not really accurate, enum variant do not match with type behavior in
                                 // scopes, because it will not shadow names in the scope where enum is declared
@@ -291,22 +327,26 @@ mod type_declaration {
                                     .expect("failed to declare constructor (enum variant)");
                                 name.append(" {")
                                     .append(
-                                        alloc.intersperse(
-                                            fields,
-                                            alloc.text(",").append(alloc.line()),
-                                        ),
+                                        alloc
+                                            .hardline()
+                                            .append(alloc.intersperse(
+                                                fields,
+                                                alloc.text(",").append(alloc.hardline()),
+                                            ))
+                                            .nest(NEST_UNIT)
+                                            .append(alloc.hardline()),
                                     )
                                     .append("}")
                             })
                             .collect::<Vec<_>>(),
-                        alloc.text(",").append(alloc.line()),
+                        alloc.text(",").append(alloc.hardline()),
                     )
                 }
             };
 
             let holder = match self.kind {
-                ast::TypeKind::Message => "enum",
-                ast::TypeKind::Enum => "struct",
+                ast::TypeKind::Message => "struct",
+                ast::TypeKind::Enum => "enum",
             };
             alloc
                 .text("#[derive(PartialEq, Eq)]")
@@ -314,8 +354,13 @@ mod type_declaration {
                 .append(format!("pub {} ", holder))
                 .append(body)
                 .append(" {")
-                .append(alloc.hardline())
-                .append(fields.nest(NEST_UNIT))
+                .append(
+                    alloc
+                        .hardline()
+                        .append(fields)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
                 .append("}")
                 .append(alloc.hardline())
                 .into_doc()
@@ -334,24 +379,29 @@ mod type_declaration {
 
             alloc
                 .text("#[derive(PartialEq, Eq)]")
-                .append(alloc.line())
+                .append(alloc.hardline())
                 .append("struct ")
                 .append(dependencies)
                 .append(" {")
                 .append(
-                    alloc.intersperse(
-                        self.dependencies
-                            .iter()
-                            .map(|symbol| {
-                                symbol.clone().generate_as_field_declaration(context, scope)
-                            })
-                            .collect::<Vec<_>>(),
-                        alloc.line(),
-                    ),
+                    alloc
+                        .hardline()
+                        .append(
+                            alloc.intersperse(
+                                self.dependencies
+                                    .iter()
+                                    .map(|symbol| {
+                                        symbol.clone().generate_as_field_declaration(context, scope)
+                                    })
+                                    .collect::<Vec<_>>(),
+                                alloc.hardline(),
+                            ),
+                        )
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
                 )
-                .nest(NEST_UNIT)
                 .append("}")
-                .append(alloc.line())
+                .append(alloc.hardline())
                 .into_doc()
         }
     }
@@ -378,23 +428,27 @@ impl<'a> Type {
 
         deps_struct
             .append(" {")
-            .append(alloc.line())
             .append(
-                alloc.intersperse(
-                    self.dependencies
-                        .iter()
-                        .zip(values.iter())
-                        .map(|(symbol, value)| {
-                            symbol
-                                .clone()
-                                .generate_as_field_name(ctx, &mut fields_scope)
-                                .append(": ")
-                                .append(value.clone())
-                        }),
-                    alloc.text(",").append(alloc.line()),
-                ),
+                alloc
+                    .hardline()
+                    .append(
+                        alloc.intersperse(
+                            self.dependencies
+                                .iter()
+                                .zip(values.iter())
+                                .map(|(symbol, value)| {
+                                    symbol
+                                        .clone()
+                                        .generate_as_field_name(ctx, &mut fields_scope)
+                                        .append(": ")
+                                        .append(value.clone())
+                                }),
+                            alloc.text(",").append(alloc.hardline()),
+                        ),
+                    )
+                    .nest(NEST_UNIT)
+                    .append(alloc.hardline()),
             )
-            .append(alloc.line())
             .append("}")
     }
 }
@@ -405,9 +459,15 @@ impl<'a> Type {
         ctx: CodegenContext<'a>,
         scope: &mut NamingScope<'_, 'a>,
     ) -> BoxDoc<'a> {
+        // how it should be
+        // identifiers::get_generated(ctx, scope, ObjectId::id(self))
+        //     .expect("could not generate comptime type of Type")
+
+        // how it is
         identifiers::Type::from_name(self.name.clone())
             .try_generate(ctx, scope)
-            .expect("failed to generate Type compile time type")
+            .or_else(|| identifiers::get_generated(ctx, scope, ObjectId::owned(self.name.clone())))
+            .expect("impossible")
     }
 }
 
@@ -415,24 +475,39 @@ mod type_inherent_impl {
     use super::ast::{Constructor, Expression, Type};
     use super::identifiers::{self, Identifier};
     use super::{BoxDoc, CodegenContext, DocAllocator, NEST_UNIT, NamingScope, ObjectId};
-    use std::iter;
 
     impl<'a> Type {
         pub(super) fn generate_inherent_impl(
             &self,
-            context: CodegenContext<'a>,
+            ctx: CodegenContext<'a>,
             scope: &mut NamingScope<'_, 'a>,
         ) -> BoxDoc<'a> {
-            let constructors = self.constructors.iter().map(|constructor| {
-                let constructor = &*constructor.upgrade().expect("missing type constructor");
-                constructor.generate_constructor_declaration(context, scope)
-            });
+            let alloc = ctx.alloc;
 
-            let setters = iter::once(BoxDoc::nil());
+            let constructors = self
+                .constructors
+                .iter()
+                .map(|constructor| {
+                    let constructor = constructor.as_ref();
+                    constructor.generate_constructor_declaration(ctx, scope)
+                })
+                .collect::<Vec<_>>();
 
-            let getters = iter::once(BoxDoc::nil());
-
-            BoxDoc::intersperse(constructors.chain(setters).chain(getters), BoxDoc::line())
+            alloc
+                .text("impl")
+                .append(alloc.space())
+                .append(self.generate_comptime_type(ctx, scope))
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(alloc.intersperse(constructors, alloc.hardline()))
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}")
+                .into_doc()
         }
     }
 
@@ -457,81 +532,11 @@ mod type_inherent_impl {
                 .chain(
                     self.fields
                         .iter()
-                        .map(|symbol| symbol.clone().generate_as_field_name(ctx, scope)),
+                        .map(|symbol| symbol.clone().generate_as_field_declaration(ctx, scope)),
                 )
                 .collect::<Vec<_>>();
 
             let (ty, dependencies) = self.split_return_type();
-
-            let type_checker_if = alloc
-                .text("if (")
-                .append(alloc.intersperse(
-                    self.fields.iter().map(|symbol| {
-                        let field = identifiers::get_generated(ctx, scope, ObjectId::id_rc(symbol))
-                            .expect("constructor params must be already in the scope");
-
-                        let mut field_scope = NamingScope::nested_in(scope);
-
-                        let field_dependencies =
-                            identifiers::Variable::from_name("dependencies".to_owned())
-                                .try_generate(ctx, &mut field_scope)
-                                .expect("failed to get 'dependencies' message field");
-
-                        let mut field_dependencies_scope = NamingScope::nested_in(&field_scope);
-
-                        if let Expression::Type { call, dependencies } = &symbol.ty {
-                            let ty = call
-                                .upgrade()
-                                .expect("type expression calls to unknown type");
-
-                            let actual = ty
-                                .dependencies
-                                .iter()
-                                .map(|dep_field| {
-                                    field
-                                        .clone()
-                                        .append(".")
-                                        .append(field_dependencies.clone())
-                                        .append(".")
-                                        .append(
-                                            identifiers::Variable::from_object(
-                                                ObjectId::id_rc(dep_field),
-                                                dep_field.name.clone(),
-                                            )
-                                            .try_generate(ctx, &mut field_dependencies_scope)
-                                            .expect("failed to access dependency"),
-                                        )
-                                })
-                                .collect::<Vec<_>>();
-
-                            let expected = dependencies
-                                .iter()
-                                .map(|expr| expr.generate_as_value(ctx, scope))
-                                .collect::<Vec<_>>();
-
-                            alloc
-                                .text("(")
-                                .append(alloc.intersperse(
-                                    actual.into_iter().zip(expected.into_iter()).map(
-                                        |(actual, expected)| {
-                                            actual
-                                                .append(alloc.space())
-                                                .append("==")
-                                                .append(alloc.space())
-                                                .append(expected)
-                                        },
-                                    ),
-                                    alloc.text(",").append(alloc.space()),
-                                ))
-                                .append(")")
-                                .into_doc()
-                        } else {
-                            panic!("symbol ty is not type expression")
-                        }
-                    }),
-                    alloc.text(", "),
-                ))
-                .append(")");
 
             let body_var = identifiers::Variable::from_name("body".to_owned()).generate(ctx, scope);
             let dependencies_var =
@@ -542,32 +547,39 @@ mod type_inherent_impl {
                 .append(body_var.clone())
                 .append(" = ")
                 .append(
-                    type_checker_if
-                        .append("{")
-                        .append(alloc.hardline())
+                    self.generate_type_checker_if(ctx, scope)
+                        .append(" {")
                         .append(
-                            self.generate_as_body_construction(
-                                ctx,
-                                scope,
-                                self.fields
-                                    .iter()
-                                    .map(|field| {
-                                        identifiers::get_generated(
-                                            ctx,
-                                            scope,
-                                            ObjectId::id_rc(field),
-                                        )
-                                        .expect("could not find passed field")
-                                    })
-                                    .collect(),
-                            )
-                            .nest(NEST_UNIT),
+                            alloc
+                                .hardline()
+                                .append(
+                                    self.generate_as_body_construction(
+                                        ctx,
+                                        scope,
+                                        self.fields
+                                            .iter()
+                                            .map(|field| {
+                                                identifiers::get_generated(
+                                                    ctx,
+                                                    scope,
+                                                    ObjectId::id_rc(field),
+                                                )
+                                                .expect("could not find passed field")
+                                            })
+                                            .collect(),
+                                    ),
+                                )
+                                .nest(NEST_UNIT)
+                                .append(alloc.hardline()),
                         )
-                        .append(alloc.hardline())
                         .append("} else {")
-                        .append(alloc.hardline())
-                        .append(Self::generate_constructor_error(ctx, scope).nest(NEST_UNIT))
-                        .append(alloc.hardline())
+                        .append(
+                            alloc
+                                .hardline()
+                                .append(Self::generate_constructor_error(ctx, scope))
+                                .nest(NEST_UNIT)
+                                .append(alloc.hardline()),
+                        )
                         .append("}"),
                 )
                 .append("?;");
@@ -577,26 +589,14 @@ mod type_inherent_impl {
                 .map(|expr| expr.generate_as_value(ctx, scope))
                 .collect();
 
-            let deps_module =
-                identifiers::get_generated(ctx, scope, ObjectId::owned("deps".to_owned()))
-                    .expect("missing deps module");
-
-            let mut deps_scope = NamingScope::nested_in(scope);
+            let mut deps_scope = NamingScope::empty();
 
             let dependencies_initialization = alloc
                 .text("let ")
                 .append(dependencies_var.clone())
                 .append(" = ")
-                .append(deps_module)
-                .append("::")
-                // TODO
-                .append(
-                    identifiers::Module::from_name(ty.name.clone())
-                        .try_generate(ctx, &mut deps_scope)
-                        .expect("impossible"),
-                )
-                .append("::")
-                .append(ty.generate_type_dependencies_struct(ctx, &mut deps_scope, dependencies));
+                .append(ty.generate_type_dependencies_struct(ctx, &mut deps_scope, dependencies))
+                .append(";");
 
             let constructor_body = body_initialization
                 .append(alloc.hardline())
@@ -607,15 +607,109 @@ mod type_inherent_impl {
                 .append(", dependencies: ")
                 .append(dependencies_var)
                 .append(" })");
-
             alloc
                 .text(format!("pub fn",))
+                .append(alloc.space())
                 .append(constructor_name)
                 .append("(")
                 .append(alloc.intersperse(params, alloc.text(", ")))
                 .append(") -> Result<Self, deps::ConstructorError> {")
-                .append(constructor_body.nest(NEST_UNIT))
+                .append(
+                    alloc
+                        .hardline()
+                        .append(constructor_body)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
                 .append("}")
+                .into_doc()
+        }
+
+        fn generate_type_checker_if(
+            &self,
+            ctx: CodegenContext<'a>,
+            scope: &mut NamingScope<'_, 'a>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            alloc
+                .text("if (")
+                .append(alloc.intersperse(
+                    self.fields.iter().map(|symbol| {
+                        if let Expression::Type {
+                            call: _,
+                            dependencies,
+                        } = &symbol.ty
+                        {
+                            alloc
+                                .text("(")
+                                .append(
+                                    alloc.intersperse(
+                                        dependencies
+                                            .iter()
+                                            .map(|expr| expr.generate_as_value(ctx, scope)),
+                                        alloc.text(",").append(alloc.line()),
+                                    ),
+                                )
+                                .append(")")
+                        } else {
+                            panic!("symbol ty is not type expression")
+                        }
+                    }),
+                    alloc.text(",").append(alloc.line()),
+                ))
+                .append(") == (")
+                .append(alloc.intersperse(
+                    self.fields.iter().map(|symbol| {
+                        let field = identifiers::get_generated(ctx, scope, ObjectId::id_rc(symbol))
+                            .expect("constructor params must be already in the scope");
+
+                        let field_dependencies = identifiers::get_generated(
+                            ctx,
+                            scope,
+                            ObjectId::owned("dependencies".to_owned()),
+                        )
+                        .expect("failed to get 'dependencies' message field");
+
+                        let mut field_dependencies_scope = NamingScope::empty();
+
+                        if let Expression::Type {
+                            call,
+                            dependencies: _,
+                        } = &symbol.ty
+                        {
+                            let ty = call
+                                .upgrade()
+                                .expect("type expression calls to unknown type");
+
+                            alloc
+                                .text("(")
+                                .append(alloc.intersperse(
+                                    ty.dependencies.iter().map(|dep_field| {
+                                        field
+                                            .clone()
+                                            .append(".")
+                                            .append(field_dependencies.clone())
+                                            .append(".")
+                                            .append(
+                                                identifiers::Variable::from_object(
+                                                    ObjectId::id_rc(dep_field),
+                                                    dep_field.name.clone(),
+                                                )
+                                                .try_generate(ctx, &mut field_dependencies_scope)
+                                                .expect("failed to access dependency"),
+                                            )
+                                    }),
+                                    alloc.text(",").append(alloc.line()),
+                                ))
+                                .append(")")
+                        } else {
+                            panic!("symbol ty is not type expression")
+                        }
+                    }),
+                    alloc.text(",").append(alloc.line()),
+                ))
+                .append(")")
                 .into_doc()
         }
 
@@ -623,7 +717,7 @@ mod type_inherent_impl {
             ctx: CodegenContext<'a>,
             _: &mut NamingScope<'_, 'a>,
         ) -> BoxDoc<'a> {
-            // Dirty, because doesn't checking that deps include this
+            // Dirty, because doesn't check that deps include this
             ctx.alloc
                 .text("Err(deps::ConstructorError::MismatchedDependencies)")
                 .into_doc()
@@ -732,16 +826,12 @@ mod value_from_expression {
 
             let alloc = ctx.alloc;
 
-            let (ty, type_deps) = self.split_return_type();
-            let dependencies = type_deps
-                .iter()
-                .map(|expr| expr.generate_as_value(ctx, scope))
-                .collect();
+            let (ty, _) = self.split_return_type();
             let deps_module =
                 identifiers::get_generated(ctx, scope, ObjectId::owned("deps".to_owned()))
                     .expect("missing deps module");
 
-            let mut deps_scope = NamingScope::nested_in(scope);
+            let mut deps_scope = NamingScope::empty();
             let constructor_func = deps_module
                 .clone()
                 .append("::")
@@ -765,50 +855,29 @@ mod value_from_expression {
                         .expect("impossible"),
                 );
 
-            // this is not accurate, because constructor scopes do not export implicits to nested constructors
-            // for example in Cons "b" Cons "a" l has one implicit twice in the constructor call stack
-            // TODO: fix that, when adequate visibility determiner will be implemented
-            let mut constructor_scope = NamingScope::nested_in(scope);
-            implicits
-                .iter()
-                .zip(self.implicits.iter())
-                .for_each(|(expr, implicit)| {
-                    let generated_expr = expr.generate_as_value(ctx, &mut constructor_scope);
-                    let _ = identifiers::try_generate_bind(
-                        ctx,
-                        &mut constructor_scope,
-                        ObjectId::id_rc(implicit),
-                        generated_expr,
-                    )
-                    .expect("could not bind to implicit");
-                });
-
-            let dependencies_struct = deps_module
-                .append("::")
-                // TODO: same to what written above.
-                .append(
-                    identifiers::Module::from_name(ty.name.clone())
-                        .try_generate(ctx, &mut deps_scope)
-                        .expect("impossible"),
-                )
-                .append("::")
-                .append(ty.generate_type_dependencies_struct(ctx, &mut deps_scope, dependencies));
-
             constructor_func
                 .append("(")
                 .append(
                     alloc.intersperse(
-                        iter::once(dependencies_struct).chain(
-                            arguments
-                                .iter()
-                                .map(|expr| expr.generate_as_value(ctx, scope)),
-                        ),
+                        implicits
+                            .iter()
+                            .map(|expr| expr.generate_as_value(ctx, scope))
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .chain(
+                                arguments
+                                    .iter()
+                                    .map(|expr| expr.generate_as_value(ctx, scope)),
+                            ),
                         alloc.text(",").append(alloc.line()),
                     ),
                 )
                 .append(")")
                 .append(".expect(")
-                .append(format!("constructor '{}::{}' failed", ty.name, self.name))
+                .append(format!(
+                    "\"constructor '{}::{}' failed\"",
+                    ty.name, self.name
+                ))
                 .append(")")
         }
     }
@@ -844,45 +913,49 @@ impl<'a> Constructor {
             identifiers::get_generated(ctx, scope, ObjectId::owned("Body".to_owned()).to_owned())
                 .expect("could not find Body enum/struct");
 
-        let mut constructor_scope = NamingScope::nested_in(scope);
+        let mut type_module_scope = NamingScope::empty();
 
         let (ty, _) = self.split_return_type();
         let constructor = match ty.kind {
             ast::TypeKind::Message => body_struct,
             ast::TypeKind::Enum => body_struct.append("::").append(
                 identifiers::Type::from_name(self.name.clone())
-                    .try_generate(ctx, &mut constructor_scope)
+                    .try_generate(ctx, &mut type_module_scope)
                     .expect("could not generate enum branch constructor"),
             ),
         };
+
+        let mut constructor_scope = NamingScope::nested_in(&type_module_scope);
 
         alloc
             .text("Ok(")
             .append(constructor)
             .append(alloc.space())
             .append("{")
-            .append(alloc.line())
             .append(
                 alloc
-                    .intersperse(
-                        self.fields
-                            .iter()
-                            .zip(fields.into_iter())
-                            .map(|(field, value)| {
-                                identifiers::Variable::from_object(
-                                    ObjectId::id_rc(field),
-                                    field.name.clone(),
-                                )
-                                .try_generate(ctx, &mut constructor_scope)
-                                .expect("could not generate constructor field")
-                                .append(": ")
-                                .append(value)
-                            }),
-                        alloc.text(",").append(alloc.line()),
+                    .hardline()
+                    .append(
+                        alloc.intersperse(
+                            self.fields
+                                .iter()
+                                .zip(fields.into_iter())
+                                .map(|(field, value)| {
+                                    identifiers::Variable::from_object(
+                                        ObjectId::id_rc(field),
+                                        field.name.clone(),
+                                    )
+                                    .try_generate(ctx, &mut constructor_scope)
+                                    .expect("could not generate constructor field")
+                                    .append(": ")
+                                    .append(value)
+                                }),
+                            alloc.text(",").append(alloc.hardline()),
+                        ),
                     )
-                    .nest(NEST_UNIT),
+                    .nest(NEST_UNIT)
+                    .append(alloc.hardline()),
             )
-            .append(alloc.line())
             .append("}")
             .append(")")
             .into_doc()
@@ -895,7 +968,11 @@ impl<'a, 'b> Symbol {
         ctx: CodegenContext<'a>,
         scope: &mut NamingScope<'b, 'a>,
     ) -> BoxDoc<'a> {
-        let ty = self.ty.generate_type_expression(ctx, scope);
+        let ty = ctx
+            .alloc
+            .text("deps::Box<")
+            .append(self.ty.generate_type_expression(ctx, scope))
+            .append(">");
         self.generate_as_field_name(ctx, scope)
             .append(": ")
             .append(ty)

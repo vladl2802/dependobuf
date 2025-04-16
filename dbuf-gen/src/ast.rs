@@ -26,7 +26,7 @@ type ElaboratedConstructor = elaborated::Constructor<Str>;
 
 #[derive(Clone, Copy)]
 struct ASTContext<'a> {
-    types: &'a Scope<'a, String, Rc<Type>>,
+    known_types: &'a Scope<'a, String, Weak<Type>>,
     variables: &'a Scope<'a, String, Rc<Symbol>>,
     constructors: &'a Scope<'a, String, Rc<Constructor>>,
 }
@@ -45,7 +45,7 @@ pub enum TypeKind {
 pub struct Type {
     pub name: Str,
     pub dependencies: Vec<Rc<Symbol>>,
-    pub constructors: Vec<Weak<Constructor>>,
+    pub constructors: Vec<Rc<Constructor>>,
     pub kind: TypeKind,
 }
 
@@ -85,7 +85,8 @@ pub struct Symbol {
 impl Module {
     pub fn from_elaborated(mut module: ElaboratedModule) -> Self {
         let mut all_constructors = Scope::<String, Rc<Constructor>>::empty();
-        let mut types = Scope::<String, Rc<Type>>::empty();
+        let mut types = Vec::with_capacity(module.types.len());
+        let mut known_types = Scope::<String, Weak<Type>>::empty();
         for (name, ty) in module.types.into_iter() {
             // all this scope constructs Rc<Type> and can be become Type::from_elaborated
             // but I do not really want this, because I do not feel like it will simplify logic
@@ -96,7 +97,7 @@ impl Module {
                 .into_iter()
                 .map(|(name, expr)| {
                     let context = ASTContext {
-                        types: &types,
+                        known_types: &known_types,
                         variables: &variables,
                         constructors: &all_constructors,
                     };
@@ -110,6 +111,11 @@ impl Module {
             let variables = variables;
 
             let ty = Rc::new_cyclic(|me| {
+                assert!(
+                    known_types.try_insert(name.clone(), me.clone()),
+                    "codegen expects valid elaborated ast: two types can not have same name"
+                );
+
                 use elaborated::ConstructorNames;
                 let (constructors, kind) = match ty.constructor_names {
                     ConstructorNames::OfMessage(name) => (vec![name], TypeKind::Message),
@@ -122,7 +128,7 @@ impl Module {
                     .into_iter()
                     .map(|constructor_name| {
                         let context = ASTContext {
-                            types: &types,
+                            known_types: &known_types,
                             variables: &variables,
                             constructors: &all_constructors,
                         };
@@ -137,7 +143,7 @@ impl Module {
 
                         let constructor = Rc::new(constructor);
                         assert!(all_constructors.try_insert(constructor.name.clone(), constructor.clone()), "codegen expects valid elaborated ast: two constructors can not have same name");
-                        Rc::downgrade(&constructor)
+                        constructor
                     })
                     .collect();
 
@@ -149,14 +155,9 @@ impl Module {
                 }
             });
 
-            assert!(
-                types.try_insert(ty.name.clone(), ty),
-                "codegen expects valid elaborated ast: two types can not have same name"
-            );
+            types.push(ty);
         }
-        Module {
-            types: types.flat_into_iter().map(|(_, value)| value).collect(),
-        }
+        Module { types }
     }
 }
 
@@ -183,7 +184,7 @@ impl Constructor {
             .collect();
 
         let constructor_context = ASTContext {
-            types: type_context.types,
+            known_types: type_context.known_types,
             variables: &all_params,
             constructors: type_context.constructors,
         };
@@ -193,6 +194,7 @@ impl Constructor {
             .map(|(name, expr)| Rc::new(Symbol::from_elaborated(constructor_context, name, expr)))
             .collect();
 
+        // this is if statement not needed now
         let result_type = match result_type {
             ElaboratedExpression::Type {
                 name: _,
@@ -259,7 +261,7 @@ impl Expression {
                 // we iterate over them in the same order
                 // we can encounter type expression only in dependencies (either when calling or declaring)
                 // in both cases top sort ensures following check
-                let call = context.types.get(&name).expect("codegen expects valid elaborated ast: expression contains call to unknown type");
+                let call = context.known_types.get(&name).expect("codegen expects valid elaborated ast: expression contains call to unknown type");
                 let dependencies = dependencies
                     .iter()
                     .cloned()
@@ -267,7 +269,7 @@ impl Expression {
                     .collect();
 
                 Expression::Type {
-                    call: Rc::downgrade(call),
+                    call: call.clone(),
                     dependencies,
                 }
             }

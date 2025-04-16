@@ -1,0 +1,54 @@
+pub mod nat {
+    mod deps {
+        pub use super::super::{Box, ConstructorError, Message};
+        // pub use super::super::{};
+    }
+    
+    #[derive(PartialEq, Eq)]
+    pub enum Body {
+        Suc {
+            pred: deps::Box<Nat>
+        },
+        Zero {
+        
+        }
+    }
+    
+    #[derive(PartialEq, Eq)]
+    struct Dependencies {
+    
+    }
+    
+    pub type Nat = deps::Message<Body, Dependencies>;
+    
+    impl Nat {
+        pub fn Suc(pred: deps::Box<Nat>) -> Result<Self, deps::ConstructorError> {
+            let body = if (()) == (()) {
+                Ok(Body::Suc {
+                    pred: pred
+                })
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
+            }?;
+            let dependencies = Dependencies {
+            
+            };
+            Ok(deps::Message { body: body, dependencies: dependencies })
+        }
+        pub fn Zero() -> Result<Self, deps::ConstructorError> {
+            let body = if () == () {
+                Ok(Body::Zero {
+                
+                })
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
+            }?;
+            let dependencies = Dependencies {
+            
+            };
+            Ok(deps::Message { body: body, dependencies: dependencies })
+        }
+    }
+}
+
+pub use nat::Nat;

@@ -1,0 +1,113 @@
+pub mod nat {
+    mod deps {
+        pub use super::super::{Box, ConstructorError, Message};
+        // pub use super::super::{};
+    }
+    
+    #[derive(PartialEq, Eq)]
+    pub enum Body {
+        Suc {
+            pred: deps::Box<Nat>
+        },
+        Zero {
+        
+        }
+    }
+    
+    #[derive(PartialEq, Eq)]
+    struct Dependencies {
+    
+    }
+    
+    pub type Nat = deps::Message<Body, Dependencies>;
+    
+    impl Nat {
+        pub fn Suc(pred: deps::Box<Nat>) -> Result<Self, deps::ConstructorError> {
+            let body = if (()) == (()) {
+                Ok(Body::Suc {
+                    pred: pred
+                })
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
+            }?;
+            let dependencies = Dependencies {
+            
+            };
+            Ok(deps::Message { body: body, dependencies: dependencies })
+        }
+        pub fn Zero() -> Result<Self, deps::ConstructorError> {
+            let body = if () == () {
+                Ok(Body::Zero {
+                
+                })
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
+            }?;
+            let dependencies = Dependencies {
+            
+            };
+            Ok(deps::Message { body: body, dependencies: dependencies })
+        }
+    }
+}
+
+pub use nat::Nat;
+
+pub mod vec {
+    mod deps {
+        pub use super::super::{Box, ConstructorError, Message};
+        pub use super::super::{{Nat, nat}};
+    }
+    
+    #[derive(PartialEq, Eq)]
+    pub enum Body {
+        Cons {
+            val: deps::Box<Nat>,
+            tail: deps::Box<Vec>
+        },
+        Nil {
+        
+        }
+    }
+    
+    #[derive(PartialEq, Eq)]
+    struct Dependencies {
+        n: deps::Box<Nat>
+    }
+    
+    pub type Vec = deps::Message<Body, Dependencies>;
+    
+    impl Vec {
+        pub fn Cons(p: deps::Box<Nat>, val: deps::Box<Nat>, tail: deps::Box<Vec>) -> Result<Self, deps::ConstructorError> {
+            let body = if ((),
+            (p)) == ((),
+            (tail.dependencies.n)) {
+                Ok(Body::Cons {
+                    val: val,
+                    tail: tail
+                })
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
+            }?;
+            let dependencies = Dependencies {
+                n: deps::Nat::Suc(p).expect("constructor 'Nat::Suc' failed")
+            };
+            Ok(deps::Message { body: body, dependencies: dependencies })
+        }
+        pub fn Nil() -> Result<Self, deps::ConstructorError> {
+            let body = if () == () {
+                Ok(Body::Nil {
+                
+                })
+            } else {
+                Err(deps::ConstructorError::MismatchedDependencies)
+            }?;
+            let dependencies = Dependencies {
+                n: deps::Nat::Zero().expect("constructor 'Nat::Zero' failed")
+            };
+            Ok(deps::Message { body: body, dependencies: dependencies })
+        }
+    }
+}
+
+pub use vec::Vec;

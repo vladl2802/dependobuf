@@ -6,7 +6,7 @@ use std::{
 };
 
 /// This enum is expected to used in order to find semantically equal object comparing its ObjectIds.
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum ObjectId<'a> {
     Pointer {
         pointer: usize,
@@ -23,7 +23,6 @@ impl<'a> ObjectId<'a> {
         ObjectId::Owned { name }
     }
 
-    // TODO: this must be pin in general case. But for now it could work for reference to.
     pub fn id<T>(this: &'a T) -> ObjectId<'a> {
         ObjectId::Pointer {
             pointer: ptr::from_ref(this) as usize,

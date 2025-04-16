@@ -1,10 +1,12 @@
 use super::identifiers::Tag;
 use std::{
-    collections::{hash_map, HashMap},
+    collections::{HashMap, hash_map},
+    fmt::Debug,
     hash::Hash,
 };
 
 /// HashMap wrapper that supports natural for the scopes nesting
+#[derive(Debug)]
 pub struct Scope<'a, Key, Value>
 where
     Key: Hash + Eq + 'a,
@@ -146,6 +148,7 @@ where
 /// which can be used later by formatter in order to generate unique name.
 ///
 /// So, NamingScope responsible for given identifier formatter unique tag.
+#[derive(Debug)]
 pub struct TaggerScope<'a, Value>
 where
     Value: Hash + Eq,
@@ -155,7 +158,7 @@ where
 
 impl<'a, Value> TaggerScope<'a, Value>
 where
-    Value: Hash + Eq,
+    Value: Hash + Eq + Debug,
 {
     pub fn empty() -> Self {
         TaggerScope {
