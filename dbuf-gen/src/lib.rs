@@ -1,9 +1,8 @@
 mod ast;
 pub mod codegen;
-mod identifiers;
-mod object_id;
+mod format;
+mod generate;
 mod scope;
+mod stack_list;
 
-use pretty::{BoxAllocator, BoxDoc, DocAllocator};
-
-const NEST_UNIT: isize = 4;
+mod rust_gen;

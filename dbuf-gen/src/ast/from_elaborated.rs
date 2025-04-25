@@ -1,13 +1,16 @@
-use super::scope::Scope;
+use super::{
+    Constructor, Module, OpCall, Str, Symbol, Type, TypeExpression, TypeKind, UnaryOp,
+    ValueExpression,
+};
+use crate::scope::Scope;
 use std::rc::{Rc, Weak};
 
 pub use dbuf_core::ast::{elaborated, operators};
 
-type Str = String; // Temporary
-
 // maybe temporary
 type ElaboratedType = elaborated::Type<Str>;
-type ElaboratedExpression = elaborated::Expression<Str>;
+type ElaboratedValueExpression = elaborated::ValueExpression<Str>;
+type ElaboratedTypeExpression = elaborated::TypeExpression<Str>;
 type ElaboratedModule = elaborated::Module<Str>;
 type ElaboratedContext = elaborated::Context<Str>;
 type ElaboratedConstructor = elaborated::Constructor<Str>;
@@ -31,59 +34,8 @@ struct ASTContext<'a> {
     constructors: &'a Scope<'a, String, Rc<Constructor>>,
 }
 
-pub struct Module {
-    pub types: Vec<Rc<Type>>,
-}
-
-#[derive(Clone)]
-pub enum TypeKind {
-    Message,
-    Enum,
-}
-
-#[derive(Clone)]
-pub struct Type {
-    pub name: Str,
-    pub dependencies: Vec<Rc<Symbol>>,
-    pub constructors: Vec<Rc<Constructor>>,
-    pub kind: TypeKind,
-}
-
-#[derive(Clone)]
-pub struct Constructor {
-    pub name: Str,
-    pub implicits: Vec<Rc<Symbol>>,
-    pub fields: Vec<Rc<Symbol>>,
-    pub result_type: TypeExpression,
-}
-
-pub type OpCall = operators::OpCall<Str, Box<Expression>>;
-
-#[derive(Clone)]
-pub enum Expression {
-    OpCall(OpCall),
-    Type {
-        call: Weak<Type>,
-        dependencies: Vec<Expression>,
-    },
-    Constructor {
-        call: Weak<Constructor>,
-        implicits: Vec<Expression>,
-        arguments: Vec<Expression>,
-    },
-    Variable(Weak<Symbol>),
-}
-
-type TypeExpression = Expression;
-
-#[derive(Clone)]
-pub struct Symbol {
-    pub name: Str,
-    pub ty: TypeExpression,
-}
-
 impl Module {
-    pub fn from_elaborated(mut module: ElaboratedModule) -> Self {
+    pub(crate) fn from_elaborated(mut module: ElaboratedModule) -> Self {
         let mut all_constructors = Scope::<String, Rc<Constructor>>::empty();
         let mut types = Vec::with_capacity(module.types.len());
         let mut known_types = Scope::<String, Weak<Type>>::empty();
@@ -196,24 +148,21 @@ impl Constructor {
 
         // this is if statement not needed now
         let result_type = match result_type {
-            ElaboratedExpression::Type {
+            ElaboratedTypeExpression::TypeExpression {
                 name: _,
                 dependencies,
             } => {
                 // unfortunately we can not verify that we constructing correct type here (even tho it's not codegen task)
                 // because we operating on still dangling this
-                Expression::Type {
+                TypeExpression::Type {
                     call: this,
                     dependencies: dependencies
                         .iter()
                         .cloned()
-                        .map(|expr| Expression::from_elaborated(constructor_context, expr))
+                        .map(|expr| ValueExpression::from_elaborated(constructor_context, expr))
                         .collect(),
                 }
             }
-            _ => panic!(
-                "codegen expects valid elaborated ast: constructor result type is not call to type"
-            ),
         };
 
         Constructor {
@@ -223,60 +172,93 @@ impl Constructor {
             result_type,
         }
     }
-
-    // TODO: maybe move such helpers to the separate file
-    /// Splits return type expression into Type and Dependencies
-    pub fn split_return_type<'a>(&'a self) -> (Rc<Type>, &'a Vec<Expression>) {
-        if let Expression::Type { call, dependencies } = &self.result_type {
-            (call.upgrade().expect("call to unknown type"), dependencies)
-        } else {
-            panic!("constructor result type is not type expression")
-        }
-    }
 }
 
-impl Expression {
-    fn from_elaborated<'a>(context: ASTContext<'a>, expr: ElaboratedExpression) -> Self {
+impl ValueExpression {
+    fn from_elaborated<'a>(context: ASTContext<'a>, expr: ElaboratedValueExpression) -> Self {
         match expr {
-            ElaboratedExpression::OpCall(op_call) => {
+            ElaboratedValueExpression::OpCall {
+                op_call,
+                result_type: _,
+            } => {
                 let op_call = match op_call {
                     operators::OpCall::Literal(literal) => OpCall::Literal(literal),
                     // TODO: UnaryOp::Access must be Symbol, not string. But in order to locate this symbol I need to traverse
                     // message fields tree and find it. This can be done nicely when proper scope visibility determiner will be implemented
                     // for now tho this is NOT HUGE problem as fields mostly are generated quite trivially.
-                    operators::OpCall::Unary(unary_op, expr) => OpCall::Unary(
-                        unary_op,
-                        Box::new(Self::from_elaborated(context, (*expr).clone())),
-                    ),
+                    operators::OpCall::Unary(unary_op, expr) => {
+                        let unary_op = match unary_op {
+                            operators::UnaryOp::Access(name) => {
+                                let ty = match expr.as_ref() {
+                                    elaborated::ValueExpression::OpCall {
+                                        op_call: _,
+                                        result_type,
+                                    } => result_type,
+                                    elaborated::ValueExpression::Constructor {
+                                        name: _,
+                                        implicits: _,
+                                        arguments: _,
+                                        result_type,
+                                    } => result_type,
+                                    elaborated::ValueExpression::Variable { name: _, ty } => ty,
+                                };
+                                let ty = match ty {
+                                    elaborated::TypeExpression::TypeExpression {
+                                        name,
+                                        dependencies: _,
+                                    } => context
+                                        .known_types
+                                        .get(name)
+                                        .expect("access to unknown type")
+                                        // Access operator can only be used on message not on enums
+                                        // There is no place in message constructor that could produce same message
+                                        // So weak must always be safely upgradable
+                                        .upgrade()
+                                        .expect("access to unknown type"),
+                                };
+
+                                assert!(
+                                    ty.constructors.len() == 1 && ty.kind == TypeKind::Message,
+                                    "access to enum"
+                                );
+                                // this should be optimized
+                                let field = ty.constructors[0]
+                                    .fields
+                                    .iter()
+                                    .find_map(|field| {
+                                        if field.name == name {
+                                            Some(field)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .expect("couldn't find field to access");
+                                UnaryOp::Access {
+                                    to: Rc::downgrade(&ty),
+                                    field: Rc::downgrade(field),
+                                }
+                            }
+                            operators::UnaryOp::Minus => UnaryOp::Minus,
+                            operators::UnaryOp::Bang => UnaryOp::Bang,
+                        };
+                        OpCall::Unary(
+                            unary_op,
+                            Box::new(ValueExpression::from_elaborated(context, (*expr).clone())),
+                        )
+                    }
                     operators::OpCall::Binary(binary_op, lhs, rhs) => OpCall::Binary(
                         binary_op,
                         Box::new(Self::from_elaborated(context, (*lhs).clone())),
                         Box::new(Self::from_elaborated(context, (*rhs).clone())),
                     ),
                 };
-                Expression::OpCall(op_call)
+                ValueExpression::OpCall(op_call)
             }
-            ElaboratedExpression::Type { name, dependencies } => {
-                // types in module must be in top sorted order (top sort over types and theirs dependencies)
-                // we iterate over them in the same order
-                // we can encounter type expression only in dependencies (either when calling or declaring)
-                // in both cases top sort ensures following check
-                let call = context.known_types.get(&name).expect("codegen expects valid elaborated ast: expression contains call to unknown type");
-                let dependencies = dependencies
-                    .iter()
-                    .cloned()
-                    .map(|expr| Expression::from_elaborated(context, expr))
-                    .collect();
-
-                Expression::Type {
-                    call: call.clone(),
-                    dependencies,
-                }
-            }
-            ElaboratedExpression::Constructor {
+            ElaboratedValueExpression::Constructor {
                 name,
                 implicits,
                 arguments,
+                result_type: _,
             } => {
                 // because constructors can be encountered only in dependence substitution and for dependencies we already
                 // verified that all types are valid then constructors of those types must also be valid
@@ -288,27 +270,51 @@ impl Expression {
                 let implicits = implicits
                     .iter()
                     .cloned()
-                    .map(|expr| Expression::from_elaborated(context, expr))
+                    .map(|expr| ValueExpression::from_elaborated(context, expr))
                     .collect();
 
                 let arguments = arguments
                     .iter()
                     .cloned()
-                    .map(|expr| Expression::from_elaborated(context, expr))
+                    .map(|expr| ValueExpression::from_elaborated(context, expr))
                     .collect();
 
-                Expression::Constructor {
+                ValueExpression::Constructor {
                     call: Rc::downgrade(call),
                     implicits,
                     arguments,
                 }
             }
-            ElaboratedExpression::Variable { name } => {
+            ElaboratedValueExpression::Variable { name, ty: _ } => {
                 let symbol =
                     Rc::downgrade(context.variables.get(&name).expect(
                         "codegen expects valid elaborated ast: non-introduced variable use",
                     ));
-                Expression::Variable(symbol)
+                ValueExpression::Variable(symbol)
+            }
+        }
+    }
+}
+
+impl TypeExpression {
+    fn from_elaborated<'a>(context: ASTContext<'a>, expr: ElaboratedTypeExpression) -> Self {
+        match expr {
+            ElaboratedTypeExpression::TypeExpression { name, dependencies } => {
+                // types in module must be in top sorted order (top sort over types and theirs dependencies)
+                // we iterate over them in the same order
+                // we can encounter type expression only in dependencies (either when calling or declaring)
+                // in both cases top sort ensures following check
+                let call = context.known_types.get(&name).expect("codegen expects valid elaborated ast: expression contains call to unknown type");
+                let dependencies = dependencies
+                    .iter()
+                    .cloned()
+                    .map(|expr| ValueExpression::from_elaborated(context, expr))
+                    .collect();
+
+                TypeExpression::Type {
+                    call: call.clone(),
+                    dependencies,
+                }
             }
         }
     }
@@ -318,17 +324,11 @@ impl Symbol {
     fn from_elaborated<'a>(
         context: ASTContext<'a>,
         name: Str,
-        type_expr: ElaboratedExpression,
+        type_expr: ElaboratedTypeExpression,
     ) -> Self {
-        match type_expr {
-            ElaboratedExpression::Type {
-                name: _,
-                dependencies: _,
-            } => {
-                let ty = Expression::from_elaborated(context, type_expr);
-                Symbol { name, ty }
-            }
-            _ => panic!("tried to construct symbol with type expression that is not type"),
+        Symbol {
+            name,
+            ty: TypeExpression::from_elaborated(context, type_expr),
         }
     }
 }

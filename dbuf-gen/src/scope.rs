@@ -1,4 +1,3 @@
-use super::identifiers::Tag;
 use std::{
     collections::{HashMap, hash_map},
     fmt::Debug,
@@ -133,66 +132,6 @@ where
                 self.iter = self.current_scope.map.iter();
             } else {
                 return None;
-            }
-        }
-    }
-}
-
-// TODO: For now TaggerScope stores actual String representation of Value in order to track values with same name
-// but that's unreasonable copy, because we actually store Value already. If it's string representation can be cheaply
-// computed, then it's unreasonable to store copy.
-// Potential solution could be to store some kind of StringRepr<Value> which just stores reference to value and
-// can be cheaply check for the equality and provide its hash
-
-/// This scope is used to track variables with the same name and give them additional unique tag
-/// which can be used later by formatter in order to generate unique name.
-///
-/// So, NamingScope responsible for given identifier formatter unique tag.
-#[derive(Debug)]
-pub struct TaggerScope<'a, Value>
-where
-    Value: Hash + Eq,
-{
-    tagger: Scope<'a, Value, Tag>,
-}
-
-impl<'a, Value> TaggerScope<'a, Value>
-where
-    Value: Hash + Eq + Debug,
-{
-    pub fn empty() -> Self {
-        TaggerScope {
-            tagger: Scope::empty(),
-        }
-    }
-
-    pub fn nested_in(parent: &'a TaggerScope<'a, Value>) -> Self {
-        TaggerScope {
-            tagger: Scope::nested_in(&parent.tagger),
-        }
-    }
-
-    pub fn contains(&self, value: &Value) -> bool {
-        self.tagger.contains(value)
-    }
-
-    pub fn insert(&mut self, value: Value) -> Tag {
-        match self.tagger.map.entry(value) {
-            hash_map::Entry::Occupied(mut occupied) => {
-                let tag = occupied.get().inc();
-                occupied.insert(tag.clone());
-                tag
-            }
-            hash_map::Entry::Vacant(vacant) => {
-                let tag = self
-                    .tagger
-                    .parent
-                    .and_then(|parent| parent.get(vacant.key()))
-                    .cloned()
-                    .map(|tag| tag.inc())
-                    .unwrap_or_default();
-                vacant.insert(tag.clone());
-                tag
             }
         }
     }

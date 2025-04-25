@@ -5,9 +5,12 @@ use std::{
     rc::{Rc, Weak},
 };
 
+// just marker trait
+pub trait Node {}
+
 /// This enum is expected to used in order to find semantically equal object comparing its ObjectIds.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum ObjectId<'a> {
+enum NodeIdStorage<'a> {
     Pointer {
         pointer: usize,
         _m: PhantomData<&'a dyn Any>,
@@ -18,30 +21,34 @@ pub enum ObjectId<'a> {
     },
 }
 
-impl<'a> ObjectId<'a> {
-    pub fn owned(name: String) -> ObjectId<'static> {
-        ObjectId::Owned { name }
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct NodeId<'a>(NodeIdStorage<'a>);
+
+impl<'a> NodeId<'a> {
+    pub fn owned(name: String) -> NodeId<'static> {
+        NodeId(NodeIdStorage::Owned { name })
     }
 
-    pub fn id<T>(this: &'a T) -> ObjectId<'a> {
-        ObjectId::Pointer {
+    // dirty but needed because references do not point to some arena
+    pub fn id<T: Node>(this: &T) -> NodeId<'static> {
+        NodeId(NodeIdStorage::Pointer {
             pointer: ptr::from_ref(this) as usize,
             _m: PhantomData,
-        }
+        })
     }
 
-    pub fn id_rc<T: 'static>(this: &Rc<T>) -> ObjectId<'static> {
-        ObjectId::Pointer {
+    pub fn id_rc<T: 'static + Node>(this: &Rc<T>) -> NodeId<'static> {
+        NodeId(NodeIdStorage::Pointer {
             pointer: Rc::as_ptr(this) as usize,
             _m: PhantomData,
-        }
+        })
     }
 
-    pub fn id_weak<T: 'static>(this: &Weak<T>) -> ObjectId<'static> {
+    pub fn id_weak<T: 'static + Node>(this: &Weak<T>) -> NodeId<'static> {
         let _ = this.upgrade().expect("dandling weak does not have id");
-        ObjectId::Pointer {
+        NodeId(NodeIdStorage::Pointer {
             pointer: this.as_ptr() as usize,
             _m: PhantomData,
-        }
+        })
     }
 }
