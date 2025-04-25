@@ -43,16 +43,11 @@ pub struct Constructor<Str> {
 /// Context is a list of typed variables.
 pub type Context<Str> = Vec<(Str, TypeExpression<Str>)>;
 
-/// Type expression is just an expression returning a type.
-pub type TypeExpression<Str> = Expression<Str>;
-
-/// Elaborated DependoBuf expression.
+/// Elaborated DependoBuf expression returning value.
 #[derive(Clone, Debug)]
-pub enum Expression<Str> {
+pub enum ValueExpression<Str> {
     /// An operator call.
     OpCall(OpCall<Str, Rec<Expression<Str>>>),
-    /// Call to dependent type.
-    Type { name: Str, dependencies: Exprs<Str> },
     /// Call to constructor.
     Constructor {
         name: Str,
@@ -63,8 +58,29 @@ pub enum Expression<Str> {
     Variable { name: Str },
 }
 
+/// Elaborated DependoBuf expression returning type.
+#[derive(Clone, Debug)]
+pub enum TypeExpression<Str> {
+    /// Call to dependent type.
+    TypeExpression {
+        name: Str,
+        dependencies: Exprs<ValueExpression<Str>>,
+    },
+}
+
+/// Elaborated DependoBuf general expression.
+#[derive(Clone, Debug)]
+pub enum Expression<Str> {
+    /// Value expression
+    ValueExpression {
+        expression: ValueExpression<Str>,
+        its_type: TypeExpression<Str>,
+    },
+    TypeExpression(TypeExpression<Str>),
+}
+
 /// Shared list of subexpressions.
-pub type Exprs<S> = Rec<[Expression<S>]>;
+pub type Exprs<Expr> = Rec<[Expr]>;
 
 /// Expression uses Rc for recursion.
 /// Consider migrating to Arc when going multicore.
