@@ -47,15 +47,19 @@ pub type Context<Str> = Vec<(Str, TypeExpression<Str>)>;
 #[derive(Clone, Debug)]
 pub enum ValueExpression<Str> {
     /// An operator call.
-    OpCall(OpCall<Str, Rec<Expression<Str>>>),
+    OpCall {
+        op_call: OpCall<Str, Rec<ValueExpression<Str>>>,
+        result_type: TypeExpression<Str>,
+    },
     /// Call to constructor.
     Constructor {
         name: Str,
-        implicits: Exprs<Str>,
-        arguments: Exprs<Str>,
+        implicits: ValueExprs<Str>,
+        arguments: ValueExprs<Str>,
+        result_type: TypeExpression<Str>,
     },
     /// Just a variable.
-    Variable { name: Str },
+    Variable { name: Str, ty: TypeExpression<Str> },
 }
 
 /// Elaborated DependoBuf expression returning type.
@@ -64,23 +68,12 @@ pub enum TypeExpression<Str> {
     /// Call to dependent type.
     TypeExpression {
         name: Str,
-        dependencies: Exprs<ValueExpression<Str>>,
+        dependencies: ValueExprs<Str>,
     },
 }
 
-/// Elaborated DependoBuf general expression.
-#[derive(Clone, Debug)]
-pub enum Expression<Str> {
-    /// Value expression
-    ValueExpression {
-        expression: ValueExpression<Str>,
-        its_type: TypeExpression<Str>,
-    },
-    TypeExpression(TypeExpression<Str>),
-}
-
-/// Shared list of subexpressions.
-pub type Exprs<Expr> = Rec<[Expr]>;
+/// Shared list of value subexpressions. There are no type subexpressions for now.
+pub type ValueExprs<S> = Rec<[ValueExpression<S>]>;
 
 /// Expression uses Rc for recursion.
 /// Consider migrating to Arc when going multicore.
