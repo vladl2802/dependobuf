@@ -15,10 +15,7 @@ mod tests {
                 e::Type {
                     dependencies: Vec::new(),
                     constructor_names: e::ConstructorNames::OfEnum(
-                        ["Zero".to_owned(), "Suc".to_owned()]
-                            .into_iter()
-                            .map(|s| s.to_owned())
-                            .collect(),
+                        ["Zero", "Suc"].into_iter().map(|s| s.to_owned()).collect(),
                     ),
                 },
             )],
@@ -28,7 +25,7 @@ mod tests {
                     e::Constructor {
                         implicits: Vec::new(),
                         fields: Vec::new(),
-                        result_type: e::Expression::Type {
+                        result_type: e::TypeExpression::TypeExpression {
                             name: "Nat".to_owned(),
                             dependencies: e::Rec::new([]),
                         },
@@ -40,12 +37,12 @@ mod tests {
                         implicits: Vec::new(),
                         fields: vec![(
                             "pred".to_owned(),
-                            e::Expression::Type {
+                            e::TypeExpression::TypeExpression {
                                 name: "Nat".to_owned(),
                                 dependencies: e::Rec::new([]),
                             },
                         )],
-                        result_type: e::Expression::Type {
+                        result_type: e::TypeExpression::TypeExpression {
                             name: "Nat".to_owned(),
                             dependencies: e::Rec::new([]),
                         },
@@ -85,7 +82,7 @@ mod tests {
                     e::Type {
                         dependencies: vec![(
                             "n".to_owned(),
-                            e::Expression::Type {
+                            e::TypeExpression::TypeExpression {
                                 name: "Nat".to_owned(),
                                 dependencies: e::Rec::new([]),
                             },
@@ -102,7 +99,7 @@ mod tests {
                     e::Constructor {
                         implicits: Vec::new(),
                         fields: Vec::new(),
-                        result_type: e::Expression::Type {
+                        result_type: e::TypeExpression::TypeExpression {
                             name: "Nat".to_owned(),
                             dependencies: e::Rec::new([]),
                         },
@@ -114,12 +111,12 @@ mod tests {
                         implicits: Vec::new(),
                         fields: vec![(
                             "pred".to_owned(),
-                            e::Expression::Type {
+                            e::TypeExpression::TypeExpression {
                                 name: "Nat".to_owned(),
                                 dependencies: e::Rec::new([]),
                             },
                         )],
-                        result_type: e::Expression::Type {
+                        result_type: e::TypeExpression::TypeExpression {
                             name: "Nat".to_owned(),
                             dependencies: e::Rec::new([]),
                         },
@@ -130,12 +127,16 @@ mod tests {
                     e::Constructor {
                         implicits: Vec::new(),
                         fields: Vec::new(),
-                        result_type: e::Expression::Type {
+                        result_type: e::TypeExpression::TypeExpression {
                             name: "Vec".to_owned(),
-                            dependencies: e::Rec::new([e::Expression::Constructor {
+                            dependencies: e::Rec::new([e::ValueExpression::Constructor {
                                 name: "Zero".to_owned(),
                                 implicits: e::Rec::new([]),
                                 arguments: e::Rec::new([]),
+                                result_type: e::TypeExpression::TypeExpression {
+                                    name: "Nat".to_owned(),
+                                    dependencies: e::Rec::new([]),
+                                },
                             }]),
                         },
                     },
@@ -145,7 +146,7 @@ mod tests {
                     e::Constructor {
                         implicits: vec![(
                             "p".to_owned(),
-                            e::Expression::Type {
+                            e::TypeExpression::TypeExpression {
                                 name: "Nat".to_owned(),
                                 dependencies: e::Rec::new([]),
                             },
@@ -153,29 +154,41 @@ mod tests {
                         fields: vec![
                             (
                                 "val".to_owned(),
-                                e::Expression::Type {
+                                e::TypeExpression::TypeExpression {
                                     name: "Nat".to_owned(),
                                     dependencies: e::Rec::new([]),
                                 },
                             ),
                             (
                                 "tail".to_owned(),
-                                e::Expression::Type {
+                                e::TypeExpression::TypeExpression {
                                     name: "Vec".to_owned(),
-                                    dependencies: e::Rec::new([e::Expression::Variable {
+                                    dependencies: e::Rec::new([e::ValueExpression::Variable {
                                         name: "p".to_owned(),
+                                        ty: e::TypeExpression::TypeExpression {
+                                            name: "Nat".to_owned(),
+                                            dependencies: e::Rec::new([]),
+                                        },
                                     }]),
                                 },
                             ),
                         ],
-                        result_type: e::Expression::Type {
+                        result_type: e::TypeExpression::TypeExpression {
                             name: "Vec".to_owned(),
-                            dependencies: e::Rec::new([e::Expression::Constructor {
+                            dependencies: e::Rec::new([e::ValueExpression::Constructor {
                                 name: "Suc".to_owned(),
                                 implicits: e::Rec::new([]),
-                                arguments: e::Rec::new([e::Expression::Variable {
+                                arguments: e::Rec::new([e::ValueExpression::Variable {
                                     name: "p".to_owned(),
+                                    ty: e::TypeExpression::TypeExpression {
+                                        name: "Nat".to_owned(),
+                                        dependencies: e::Rec::new([]),
+                                    },
                                 }]),
+                                result_type: e::TypeExpression::TypeExpression {
+                                    name: "Nat".to_owned(),
+                                    dependencies: e::Rec::new([]),
+                                },
                             }]),
                         },
                     },
@@ -193,4 +206,3 @@ mod tests {
         println!("{}", code);
     }
 }
-
