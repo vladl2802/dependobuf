@@ -28,6 +28,7 @@ pub struct Container {
     tags: HashMap<RustObject, u64>,
 }
 
+#[derive(Debug)]
 pub struct NamingContext<'id, 'parent>(
     ManuallyDrop<NamespaceTree<'parent, ObjectId<'id>, Container>>,
 );
@@ -40,6 +41,12 @@ where
     cursor: C,
     _value: PhantomData<&'cursor GeneratedRustObject>,
     _key: PhantomData<&'cursor ObjectId<'id>>,
+}
+
+#[derive(Clone)]
+pub struct Name {
+    object: RustObject,
+    tag: u64,
 }
 
 impl<'id, 'parent> NamingContext<'id, 'parent> {
@@ -103,23 +110,11 @@ impl<'id, 'parent> NamingContext<'id, 'parent> {
         }
     }
 
-    pub fn try_insert_object<'child, O: Object<'id>>(
-        &'child mut self,
-        object: O,
-    ) -> Option<(O::Generated, NamingContext<'id, 'child>)> {
-        match O::lookup_tag(
-            self.0.cursor().value_map(|node| (&node.tags, &node.object)),
-            &object.rust_object(),
-        ) {
-            Some(_) => None,
-            None => Some(self.insert_object_with_tag(object, 0)),
-        }
+    pub fn remove_tree(&mut self, id: ObjectId<'id>) -> Option<Node<'id>> {
+        self.0.remove_tree(id)
     }
 
-    pub fn insert_object<'child, O: Object<'id>>(
-        &'child mut self,
-        object: O,
-    ) -> (O::Generated, NamingContext<'id, 'child>) {
+    pub fn name_object<O: Object<'id>>(&mut self, object: &O) -> Name {
         let tag = match O::lookup_tag(
             self.0.cursor().value_map(|node| (&node.tags, &node.object)),
             &object.rust_object(),
@@ -127,7 +122,58 @@ impl<'id, 'parent> NamingContext<'id, 'parent> {
             Some(tag) => tag + 1,
             None => 0,
         };
-        self.insert_object_with_tag(object, tag)
+        self.0.get_mut().tags.insert(object.rust_object(), tag);
+        Name {
+            object: object.rust_object(),
+            tag,
+        }
+    }
+
+    pub fn insert_object<'child, O: Object<'id>>(
+        &'child mut self,
+        object: O,
+        name: Name,
+    ) -> (O::Generated, NamingContext<'id, 'child>) {
+        let id = object.object_id();
+        let generated = object.generate_tagged(name.tag);
+        (
+            generated.clone(),
+            Self::wrap_namespace_tree(self.0.insert(
+                id,
+                Container {
+                    object: generated.into(),
+                    tags: HashMap::new(),
+                },
+            )),
+        )
+    }
+
+    pub fn insert_object_preserve_name<'child, O: Object<'id>>(
+        &'child mut self,
+        object: O,
+    ) -> Option<(O::Generated, NamingContext<'id, 'child>)> {
+        let rust_object = object.rust_object();
+        match O::lookup_tag(
+            self.0.cursor().value_map(|node| (&node.tags, &node.object)),
+            &rust_object,
+        ) {
+            Some(_) => None,
+            None => Some(self.insert_object(
+                object,
+                Name {
+                    object: rust_object,
+                    tag: 0,
+                },
+            )),
+        }
+    }
+
+    pub fn insert_object_auto_name<'child, O: Object<'id>>(
+        &'child mut self,
+        object: O,
+    ) -> (O::Generated, NamingContext<'id, 'child>) {
+        let name = self.name_object(&object);
+        self.insert_object(object, name)
     }
 
     pub fn cursor<'cursor>(
@@ -232,8 +278,6 @@ where
 impl<'id, 'parent> Drop for NamingContext<'id, 'parent> {
     fn drop(&mut self) {
         // SAFETY: we are in drop so there will be no usage after
-        unsafe {
-            ManuallyDrop::take(&mut self.0).finish();
-        }
+        unsafe { ManuallyDrop::take(&mut self.0) }.finish();
     }
 }

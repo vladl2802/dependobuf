@@ -4,6 +4,7 @@ use crate::generate::lookup::Cursor;
 
 use super::{GeneratedObject, GeneratedRustObject, Kind, Object, ObjectId, RustObject};
 
+#[derive(Clone)]
 pub struct Scope<'id> {
     id: ObjectId<'id>,
 }

@@ -73,14 +73,14 @@ pub trait GeneratedObject<'me>:
 {
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tag {
     None,
     Number(u64),
     String(&'static str),
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectId<'id>(pub NodeId<'id>, pub Tag);
 
 impl<'id> ObjectId<'id> {

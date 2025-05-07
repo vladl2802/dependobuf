@@ -6,3 +6,6 @@ version.workspace = true
 [dependencies]
 dbuf-core.workspace = true
 pretty = "=0.12.3"
+
+[dev-dependencies]
+dbuf-rust-runtime = { path = "../runtime/dbuf-rust-runtime" }

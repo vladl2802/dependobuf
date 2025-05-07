@@ -57,11 +57,11 @@ mod tests {
         assert!(codegen::generate_module(module, &mut writer).is_ok());
 
         let code = String::from_utf8(writer).expect("generated code must be correct utf8");
-        println!("{}", code);
+        // println!("{}", code);
 
-        // let expected = include_str!("./canon/basic.rs-like");
+        let expected = include_str!("./canon/basic.rs");
 
-        // assert_eq!(code, expected);
+        assert_eq!(code, expected);
     }
 
     #[test]
@@ -202,7 +202,10 @@ mod tests {
         assert!(codegen::generate_module(module, &mut writer).is_ok());
 
         let code = String::from_utf8(writer).expect("generated code must be correct utf8");
-
         println!("{}", code);
+
+        let expected = include_str!("./canon/nat_vec.rs");
+
+        assert_eq!(code, expected);
     }
 }

@@ -1,7 +1,9 @@
+use dbuf_rust_runtime::{Box, ConstructorError};
+
 pub mod nat {
     mod deps {
-        pub use super::super::{Box, ConstructorError, Message};
-        // pub use super::super::{};
+        pub(super) use super::super::{Box, ConstructorError};
+        // pub(super) use super::super::{};
     }
     
     #[derive(PartialEq, Eq)]
@@ -19,7 +21,11 @@ pub mod nat {
     
     }
     
-    pub type Nat = deps::Message<Body, Dependencies>;
+    #[derive(PartialEq, Eq)]
+    pub struct Nat {
+        body: Body,
+        dependencies: Dependencies
+    }
     
     impl Nat {
         pub fn Suc(pred: deps::Box<Nat>) -> Result<Self, deps::ConstructorError> {
@@ -33,7 +39,7 @@ pub mod nat {
             let dependencies = Dependencies {
             
             };
-            Ok(deps::Message { body: body, dependencies: dependencies })
+            Ok(Self { body: body, dependencies: dependencies })
         }
         pub fn Zero() -> Result<Self, deps::ConstructorError> {
             let body = if () == () {
@@ -46,9 +52,9 @@ pub mod nat {
             let dependencies = Dependencies {
             
             };
-            Ok(deps::Message { body: body, dependencies: dependencies })
+            Ok(Self { body: body, dependencies: dependencies })
         }
     }
 }
 
-pub use nat::Nat;
+pub use nat::Nat as Nat;

@@ -5,12 +5,14 @@ use super::{
     node::Node,
 };
 
+#[derive(Debug)]
 struct Edge<'parent, Key: Eq + Hash, Value> {
     associated_with: Key,
     generated: &'parent mut Node<Key, Value>,
     edge: Option<&'parent Edge<'parent, Key, Value>>,
 }
 
+#[derive(Debug)]
 pub struct NamespaceTree<'parent, Key: Eq + Hash, Value> {
     generated: Node<Key, Value>,
     edge: Option<Edge<'parent, Key, Value>>,
@@ -45,6 +47,10 @@ impl<'parent, Key: Eq + Hash + Clone, Value: Clone> NamespaceTree<'parent, Key, 
 
     pub fn insert_tree(&mut self, key: Key, node: Node<Key, Value>) {
         self.generated.insert(key, node);
+    }
+
+    pub fn remove_tree(&mut self, key: Key) -> Option<Node<Key, Value>> {
+        self.generated.remove(key)
     }
 
     pub fn try_insert<'child>(

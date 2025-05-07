@@ -99,8 +99,8 @@ pub mod foo {
     use deps::sum;
 
     mod deps {
-        pub use super::super::{sum, Sum};
         pub use super::super::{Box, ConstructorError, Message};
+        pub use super::super::{Sum, sum};
         pub use crate::try_block;
     }
 
@@ -198,4 +198,3 @@ pub mod foo {
 //         },
 //     },
 // )]
-

@@ -1,7 +1,9 @@
+use dbuf_rust_runtime::{Box, ConstructorError};
+
 pub mod nat {
     mod deps {
-        pub use super::super::{Box, ConstructorError, Message};
-        // pub use super::super::{};
+        pub(super) use super::super::{Box, ConstructorError};
+        // pub(super) use super::super::{};
     }
     
     #[derive(PartialEq, Eq)]
@@ -19,7 +21,11 @@ pub mod nat {
     
     }
     
-    pub type Nat = deps::Message<Body, Dependencies>;
+    #[derive(PartialEq, Eq)]
+    pub struct Nat {
+        body: Body,
+        dependencies: Dependencies
+    }
     
     impl Nat {
         pub fn Suc(pred: deps::Box<Nat>) -> Result<Self, deps::ConstructorError> {
@@ -33,7 +39,7 @@ pub mod nat {
             let dependencies = Dependencies {
             
             };
-            Ok(deps::Message { body: body, dependencies: dependencies })
+            Ok(Self { body: body, dependencies: dependencies })
         }
         pub fn Zero() -> Result<Self, deps::ConstructorError> {
             let body = if () == () {
@@ -46,23 +52,23 @@ pub mod nat {
             let dependencies = Dependencies {
             
             };
-            Ok(deps::Message { body: body, dependencies: dependencies })
+            Ok(Self { body: body, dependencies: dependencies })
         }
     }
 }
 
-pub use nat::Nat;
+pub use nat::Nat as Nat;
 
 pub mod vec {
     mod deps {
-        pub use super::super::{Box, ConstructorError, Message};
-        pub use super::super::{{Nat, nat}};
+        pub(super) use super::super::{Box, ConstructorError};
+        pub(super) use super::super::{{nat, Nat}};
     }
     
     #[derive(PartialEq, Eq)]
     pub enum Body {
         Cons {
-            val: deps::Box<Nat>,
+            val: deps::Box<deps::nat::Nat>,
             tail: deps::Box<Vec>
         },
         Nil {
@@ -72,16 +78,20 @@ pub mod vec {
     
     #[derive(PartialEq, Eq)]
     struct Dependencies {
-        n: deps::Box<Nat>
+        n: deps::Box<deps::nat::Nat>
     }
     
-    pub type Vec = deps::Message<Body, Dependencies>;
+    #[derive(PartialEq, Eq)]
+    pub struct Vec {
+        body: Body,
+        dependencies: Dependencies
+    }
     
     impl Vec {
-        pub fn Cons(p: deps::Box<Nat>, val: deps::Box<Nat>, tail: deps::Box<Vec>) -> Result<Self, deps::ConstructorError> {
+        pub fn Cons(p: deps::Box<deps::nat::Nat>, val: deps::Box<deps::nat::Nat>, tail: deps::Box<Vec>) -> Result<Self, deps::ConstructorError> {
             let body = if ((),
-            (p)) == ((),
-            (tail.dependencies.n)) {
+            (&p)) == ((),
+            (&tail.dependencies.n)) {
                 Ok(Body::Cons {
                     val: val,
                     tail: tail
@@ -90,9 +100,9 @@ pub mod vec {
                 Err(deps::ConstructorError::MismatchedDependencies)
             }?;
             let dependencies = Dependencies {
-                n: deps::Nat::Suc(p).expect("constructor 'Nat::Suc' failed")
+                n: Box::new(deps::nat::Nat::Suc(p).expect("constructor 'Nat::Suc' failed"))
             };
-            Ok(deps::Message { body: body, dependencies: dependencies })
+            Ok(Self { body: body, dependencies: dependencies })
         }
         pub fn Nil() -> Result<Self, deps::ConstructorError> {
             let body = if () == () {
@@ -103,11 +113,11 @@ pub mod vec {
                 Err(deps::ConstructorError::MismatchedDependencies)
             }?;
             let dependencies = Dependencies {
-                n: deps::Nat::Zero().expect("constructor 'Nat::Zero' failed")
+                n: Box::new(deps::nat::Nat::Zero().expect("constructor 'Nat::Zero' failed"))
             };
-            Ok(deps::Message { body: body, dependencies: dependencies })
+            Ok(Self { body: body, dependencies: dependencies })
         }
     }
 }
 
-pub use vec::Vec;
+pub use vec::Vec as Vec;

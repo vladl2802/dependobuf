@@ -22,8 +22,9 @@ impl<'a> Module {
             .collect::<Vec<_>>();
 
         alloc
-            .intersperse(types, alloc.hardline())
-            .append(alloc.hardline())
+            .text("use dbuf_rust_runtime::{Box, ConstructorError};")
+            .append(alloc.hardline().append(alloc.hardline()))
+            .append(alloc.intersperse(types, alloc.hardline()))
             .into_doc()
     }
 }
@@ -33,9 +34,9 @@ impl<'a> Type {
         let alloc = ctx.alloc;
 
         let (type_module, mut type_namespace) = namespace
-            .try_insert_object(objects::Module::from_object(
-                ObjectId(NodeId::id(self), objects::Tag::None),
-                self.name.clone(),
+            .insert_object_preserve_name(objects::Module::from_object(
+                ObjectId(NodeId::id(self), Tag::String("module")),
+                self.name.to_lowercase().clone(),
             ))
             .expect("couldn't generate type module");
 
@@ -80,6 +81,11 @@ impl<'a> Type {
                 );
             });
 
+        let (use_alias_name, _) = namespace.insert_object_auto_name(objects::Type::from_object(
+            ObjectId(NodeId::id(self), Tag::String("type")),
+            self.name.clone(),
+        ));
+
         alloc
             .text("pub mod")
             .append(alloc.space())
@@ -99,6 +105,10 @@ impl<'a> Type {
             .append("pub use")
             .append(alloc.space())
             .append(message_type_path)
+            .append(alloc.space())
+            .append("as")
+            .append(alloc.space())
+            .append(use_alias_name.to_doc(ctx))
             .append(";")
             .append(alloc.hardline())
             .into_doc()
@@ -116,7 +126,7 @@ mod type_dependencies_import {
             (ctx, namespace): MutContext<'a, '_, '_>,
         ) -> BoxDoc<'a> {
             let (deps_module, mut deps_namespace) = namespace
-                .try_insert_object(objects::Module::from_name("deps".to_owned()))
+                .insert_object_preserve_name(objects::Module::from_name("deps".to_owned()))
                 .expect("couldn't create 'deps' module");
 
             let namespace = &mut deps_namespace;
@@ -149,21 +159,20 @@ mod type_dependencies_import {
             dependencies.remove(&NodeId::id(self)); // don't need to return self name
 
             let (box_type, _) = namespace
-                .try_insert_object(objects::Type::from_name("Box".to_owned()))
+                .insert_object_preserve_name(objects::Type::from_name("Box".to_owned()))
                 .expect("couldn't insert Box");
             let (constructor_error_type, _) = namespace
-                .try_insert_object(objects::Type::from_name("ConstructorError".to_owned()))
+                .insert_object_preserve_name(objects::Type::from_name(
+                    "ConstructorError".to_owned(),
+                ))
                 .expect("couldn't insert ConstructorError");
-            let (generic_message_type, _) = namespace
-                .try_insert_object(objects::Type::from_name("Message".to_owned()))
-                .expect("couldn't insert Message");
 
             // TODO: get those from module
             let helpers_deps = alloc
-                .text("pub use super::super::{")
+                .text("pub(super) use super::super::{")
                 .append(
                     alloc.intersperse(
-                        [box_type, constructor_error_type, generic_message_type]
+                        [box_type, constructor_error_type]
                             .iter()
                             .map(|generated| generated.to_doc(ctx)),
                         alloc.text(",").append(alloc.space()),
@@ -178,17 +187,20 @@ mod type_dependencies_import {
             };
 
             let other_type_deps = other_type_deps
-                .append(alloc.text("pub use"))
+                .append(alloc.text("pub(super) use"))
                 .append(alloc.space())
+                .append("super::super::")
+                .append("{")
                 .append(alloc.intersperse(
                     dependencies.into_iter().map(|node_id| {
                         let global_namespace = namespace
                             .cursor()
                             .lookup_module_root()
                             .go_back()
-                            .expect("message module expected to be non-root")
-                            .lookup_module_root();
-                        let global_namespace_path = alloc.text("super::super::");
+                            .expect("deps module expected to be non-root")
+                            .lookup_module_root()
+                            .go_back()
+                            .expect("message module expected to be non-root");
 
                         let message_module = global_namespace
                             .clone()
@@ -200,7 +212,7 @@ mod type_dependencies_import {
 
                         let message_type = global_namespace
                             .lookup_generated::<objects::Type>(ObjectId(
-                                node_id,
+                                node_id.clone(),
                                 Tag::String("type"),
                             ))
                             .expect("couldn't get message type");
@@ -219,16 +231,16 @@ mod type_dependencies_import {
                         drop(message_type);
 
                         namespace.insert_tree(
-                            ObjectId(NodeId::id(self), Tag::String("module")),
+                            ObjectId(node_id.clone(), Tag::String("module")),
                             message_module_node,
                         );
                         namespace.insert_tree(
-                            ObjectId(NodeId::id(self), Tag::String("type")),
+                            ObjectId(node_id.clone(), Tag::String("type")),
                             message_type_node,
                         );
 
-                        global_namespace_path
-                            .append("{")
+                        alloc
+                            .text("{")
                             .append(message_module_generated.to_doc(ctx))
                             .append(",")
                             .append(alloc.space())
@@ -344,80 +356,74 @@ mod type_declaration {
         ) -> BoxDoc<'a> {
             let alloc = ctx.alloc;
 
-            // put message type name into namespace prior to Body and Dependencies
-            let (message_type, _) = namespace.insert_object(objects::Type::from_object(
+            let message_type_object = objects::Type::from_object(
                 ObjectId(NodeId::id(self), Tag::String("type")),
                 self.name.clone(),
-            ));
+            );
+            let name = namespace.name_object(&message_type_object);
+            let (_, _) = namespace.insert_object(message_type_object.clone(), name.clone());
 
             let body = self.generate_body((ctx, namespace));
             let dependencies = self.generate_dependencies((ctx, namespace));
 
-            let name_alias = alloc
-                .text("pub type ")
-                .append(message_type.to_doc(ctx))
-                .append({
-                    let mut path: Option<DocBuilder<_>> = Some(alloc.text(""));
+            let _ = namespace.remove_tree(ObjectId(NodeId::id(self), Tag::String("type")));
+            let (message_type_name, mut message_type_namespace) =
+                namespace.insert_object(message_type_object, name);
 
-                    namespace
-                        .cursor()
-                        .lookup_generated::<objects::Module>(ObjectId::from_name("deps".to_owned()))
-                        .expect("couldn't get deps module")
-                        .apply(|_, generated| {
-                            path = Some(
-                                path.take().unwrap().append(
-                                    objects::GeneratedModule::try_from(generated)
-                                        .expect("expected module")
-                                        .to_doc(ctx),
-                                ),
-                            )
-                        })
-                        .lookup_generated::<objects::Type>(ObjectId::from_name(
-                            "Message".to_owned(),
-                        ))
-                        .expect("couldn't get deps::Message")
-                        .apply(|_, generated| {
-                            path = Some(
-                                path.take().unwrap().append(
-                                    objects::GeneratedType::try_from(generated)
-                                        .expect("expected type")
-                                        .to_doc(ctx),
-                                ),
-                            )
-                        });
+            let (body_field, _) = message_type_namespace
+                .insert_object_preserve_name(objects::Variable::from_name("body".to_owned()))
+                .expect("couldn't insert body field");
+            let (dependencies_field, _) = message_type_namespace
+                .insert_object_preserve_name(objects::Variable::from_name(
+                    "dependencies".to_owned(),
+                ))
+                .expect("couldn't insert dependencies field");
 
-                    path.unwrap()
-                })
-                .append("<")
-                .append(
-                    objects::GeneratedType::try_from(
-                        namespace
-                            .get_generated::<objects::Type>(ObjectId::from_name("Body".to_owned()))
-                            .expect("couldn't get type Body")
-                            .0,
-                    )
-                    .expect("expected type")
-                    .to_doc(ctx),
-                )
-                .append(",")
+            drop(message_type_namespace);
+
+            let (body_type, _) = namespace
+                .get_generated::<objects::Type>(ObjectId::from_name("Body".to_owned()))
+                .expect("couldn't get Body type");
+            let (dependencies_type, _) = namespace
+                .get_generated::<objects::Type>(ObjectId::from_name("Dependencies".to_owned()))
+                .expect("couldn't get Dependencies type");
+
+            let message_struct = alloc
+                .text("#[derive(PartialEq, Eq)]")
+                .append(alloc.hardline())
+                .append("pub struct")
                 .append(alloc.space())
+                .append(message_type_name.to_doc(ctx))
+                .append(alloc.space())
+                .append("{")
                 .append(
-                    objects::GeneratedType::try_from(
-                        namespace
-                            .get_generated::<objects::Type>(ObjectId::from_name(
-                                "Dependencies".to_owned(),
-                            ))
-                            .expect("couldn't get type Dependencies")
-                            .0,
-                    )
-                    .expect("expected type")
-                    .to_doc(ctx),
+                    alloc
+                        .hardline()
+                        .append(
+                            alloc.intersperse(
+                                [
+                                    (body_field, body_type),
+                                    (dependencies_field, dependencies_type),
+                                ]
+                                .into_iter()
+                                .map(|(field, ty)| {
+                                    field
+                                        .to_doc(ctx)
+                                        .append(":")
+                                        .append(alloc.space().append(ty.to_doc(ctx)))
+                                }),
+                                alloc.text(",").append(alloc.hardline()),
+                            ),
+                        )
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
                 )
+                .append("}")
                 .append(alloc.hardline())
                 .into_doc();
 
             alloc
-                .intersperse([body, dependencies, name_alias], alloc.hardline())
+                .intersperse([body, dependencies, message_struct], alloc.hardline())
                 .into_doc()
         }
 
@@ -425,7 +431,7 @@ mod type_declaration {
             let alloc = ctx.alloc;
 
             let (body_type, mut body_namespace) =
-                namespace.insert_object(objects::Type::from_name("Body".to_owned()));
+                namespace.insert_object_auto_name(objects::Type::from_name("Body".to_owned()));
 
             // if I implement Codegen::generate as trait, those helper function can be generated automatically
             let generate_fields =
@@ -459,7 +465,7 @@ mod type_declaration {
                             .map(|constructor| {
                                 // branches are not quite types but could be modeled as such
                                 let (branch_type, mut branch_namespace) = body_namespace
-                                    .insert_object(objects::Type::from_object(
+                                    .insert_object_auto_name(objects::Type::from_object(
                                         ObjectId(
                                             NodeId::id_rc(constructor),
                                             Tag::String("enum_branch"),
@@ -518,8 +524,8 @@ mod type_declaration {
         fn generate_dependencies(&self, (ctx, namespace): MutContext<'a, '_, '_>) -> BoxDoc<'a> {
             let alloc = ctx.alloc;
 
-            let (dependencies_type, mut dependencies_namespace) =
-                namespace.insert_object(objects::Type::from_name("Dependencies".to_owned()));
+            let (dependencies_type, mut dependencies_namespace) = namespace
+                .insert_object_auto_name(objects::Type::from_name("Dependencies".to_owned()));
 
             alloc
                 .text("#[derive(PartialEq, Eq)]")
@@ -599,7 +605,9 @@ impl<'a> Type {
                                         .to_doc(ctx)
                                         .append(":")
                                         .append(alloc.space())
+                                        .append("Box::new(")
                                         .append(value)
+                                        .append(")")
                                 },
                             ),
                             alloc.text(",").append(alloc.hardline()),
@@ -623,7 +631,7 @@ mod type_inherent_impl {
             let alloc = ctx.alloc;
 
             let (_, mut inherent_impl_namespace) =
-                namespace.insert_object(objects::Type::from_object(
+                namespace.insert_object_auto_name(objects::Type::from_object(
                     ObjectId(NodeId::id(self), Tag::String("inherent_impl")),
                     "inherent_impl".to_owned(),
                 ));
@@ -674,7 +682,7 @@ mod type_inherent_impl {
             let alloc = ctx.alloc;
 
             let (constructor_func, mut constructor_namespace) =
-                namespace.insert_object(objects::Function::from_object(
+                namespace.insert_object_auto_name(objects::Function::from_object(
                     ObjectId(NodeId::id(self), Tag::None),
                     self.name.clone(),
                 ));
@@ -697,7 +705,7 @@ mod type_inherent_impl {
                 }))
                 .collect::<Vec<_>>();
 
-            let (_, mut constructor_body) = namespace.insert_object(objects::Scope::new(
+            let (_, mut constructor_body) = namespace.insert_object_auto_name(objects::Scope::new(
                 ObjectId::from_name("constructor_body".to_owned()),
             ));
             let namespace = &mut constructor_body;
@@ -708,9 +716,9 @@ mod type_inherent_impl {
                 }
             };
             let (body_var, _) =
-                namespace.insert_object(objects::Variable::from_name("body".to_owned()));
-            let (dependencies_var, _) =
-                namespace.insert_object(objects::Variable::from_name("dependencies".to_owned()));
+                namespace.insert_object_auto_name(objects::Variable::from_name("body".to_owned()));
+            let (dependencies_var, _) = namespace
+                .insert_object_auto_name(objects::Variable::from_name("dependencies".to_owned()));
 
             let body_initialization = alloc
                 .text("let ")
@@ -719,7 +727,7 @@ mod type_inherent_impl {
                 .append(self.generate_type_checker_if((ctx, namespace)))
                 .append(" {")
                 .append({
-                    let (_, scope) = namespace.insert_object(objects::Scope::new(
+                    let (_, scope) = namespace.insert_object_auto_name(objects::Scope::new(
                         ObjectId::from_name("if_true".to_owned()),
                     ));
                     let fields = self
@@ -751,8 +759,8 @@ mod type_inherent_impl {
                 })
                 .append("} else {")
                 .append({
-                    let (_, scope) = namespace.insert_object(objects::Scope::new(
-                        ObjectId::from_name("if_true".to_owned()),
+                    let (_, scope) = namespace.insert_object_auto_name(objects::Scope::new(
+                        ObjectId::from_name("if_false".to_owned()),
                     ));
                     alloc
                         .hardline()
@@ -788,7 +796,8 @@ mod type_inherent_impl {
                 .append(alloc.hardline())
                 .append(dependencies_initialization)
                 .append(alloc.hardline())
-                .append("Ok(deps::Message { body: ")
+                // TODO
+                .append("Ok(Self { body: ")
                 .append(body_var.to_doc(ctx))
                 .append(", dependencies: ")
                 .append(dependencies_var.to_doc(ctx))
@@ -826,7 +835,9 @@ mod type_inherent_impl {
                                 .text("(")
                                 .append(alloc.intersperse(
                                     dependencies.iter().map(|expr| {
-                                        expr.generate_as_value((ctx, namespace.cursor()))
+                                        alloc.text("&").append(
+                                            expr.generate_as_value((ctx, namespace.cursor())),
+                                        )
                                     }),
                                     alloc.text(",").append(alloc.line()),
                                 ))
@@ -865,8 +876,9 @@ mod type_inherent_impl {
                             .text("(")
                             .append(alloc.intersperse(
                                 symbol_ty.dependencies.iter().map(|dep_field| {
-                                    field_var
-                                        .to_doc(ctx)
+                                    alloc
+                                        .text("&")
+                                        .append(field_var.to_doc(ctx))
                                         .append(".")
                                         .append("dependencies") // because Message was not fully inserted TODO: fix that
                                         .append(".")
@@ -1200,7 +1212,7 @@ impl<'a, 'b> Symbol {
             })
             .append(">");
         let name = namespace
-            .insert_object(objects::Variable::from_object(
+            .insert_object_auto_name(objects::Variable::from_object(
                 ObjectId(NodeId::id_rc(&self), Tag::None),
                 self.name.clone(),
             ))
@@ -1260,7 +1272,7 @@ impl<'a> Type {
                         ),
                     )
                 });
-            Some((path.unwrap(), cursor))
+            Some((path.unwrap().append("::"), cursor))
         }
     }
 }

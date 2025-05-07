@@ -10,6 +10,7 @@ use crate::{
 
 use super::{GeneratedObject, GeneratedRustObject, Kind, Object, ObjectId, RustObject};
 
+#[derive(Clone)]
 pub struct Module<'id> {
     id: ObjectId<'id>,
     name: String,
@@ -96,12 +97,15 @@ impl<'id> Object<'id> for Module<'id> {
                 if cursor.key() == Some(&id) {
                     LookupResult::Stop(Some(cursor.clone()))
                 } else {
-                    if Self::backwards_lookup_limit(generated) {
-                        return LookupResult::Stop(None);
-                    }
                     match cursor.clone().next(&id) {
                         Some(cursor) => LookupResult::Stop(Some(cursor)),
-                        None => LookupResult::GoBack,
+                        None => {
+                            if Self::backwards_lookup_limit(generated) {
+                                LookupResult::Stop(None)
+                            } else {
+                                LookupResult::GoBack
+                            }
+                        }
                     }
                 }
             })

@@ -112,6 +112,7 @@ name = "dbuf-gen"
 version = "0.1.0"
 dependencies = [
  "dbuf-core",
+ "dbuf-rust-runtime",
  "pretty",
 ]
 
@@ -123,6 +124,10 @@ dependencies = [
  "tokio",
  "tower-lsp",
 ]
+
+[[package]]
+name = "dbuf-rust-runtime"
+version = "0.1.0"
 
 [[package]]
 name = "displaydoc"
