@@ -9,4 +9,4 @@ pretty.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-dbuf-rust-runtime = { path = "../runtime/dbuf-rust-runtime" }
+dbuf-rust-runtime.workspace = true

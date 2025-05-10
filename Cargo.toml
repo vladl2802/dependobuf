@@ -12,3 +12,4 @@ logos = "0.15.0"
 unescape = "0.1.0"
 pretty = "=0.12.3"
 pretty_assertions = "1.4.1"
+dbuf-rust-runtime = { path = "runtime/dbuf-rust-runtime" }
