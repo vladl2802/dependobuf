@@ -1,4 +1,5 @@
 pub mod definition;
+pub mod location;
 
 use super::operators::{Literal, OpCall};
 use definition::Definitions;
@@ -45,16 +46,23 @@ pub struct Expression<Loc, Str> {
     /// Location of a subexpression.
     pub loc: Loc,
     /// Subexpression itself.
-    pub node: ExpressionNode<Str, Expression<Loc, Str>>,
+    pub node: ExpressionNode<Loc, Str, Expression<Loc, Str>>,
 }
 
 /// Possible expression node types.
 #[derive(Clone, Debug)]
-pub enum ExpressionNode<Str, Expr> {
+pub enum ExpressionNode<Loc, Str, Expr> {
     /// Operator call.
     OpCall(OpCall<Str, Rec<Expr>>),
-    /// Call to dependent type, its constructor, or just a variable.
+    /// Call to dependent type.
     FunCall { fun: Str, args: Rec<[Expr]> },
+    /// Constructor call.
+    ConstructorCall {
+        name: Str,
+        fields: Definitions<Loc, Str, Expr>,
+    },
+    /// Variable.
+    Variable { name: Str },
     /// Typed hole which should report expected type of a missing expression.
     TypedHole,
 }
@@ -65,20 +73,24 @@ pub struct Pattern<Loc, Str> {
     /// Location of a subpattern.
     pub loc: Loc,
     /// Subpattern itself.
-    pub node: PatternNode<Str, Pattern<Loc, Str>>,
+    pub node: PatternNode<Loc, Str, Pattern<Loc, Str>>,
 }
 
 /// Possible pattern node types.
 #[derive(Clone, Debug)]
-pub enum PatternNode<Str, Pattern> {
-    /// Constructor call, or just a variable.
-    Call { name: Str, fields: Rec<[Pattern]> },
+pub enum PatternNode<Loc, Str, Pattern> {
+    /// Constructor call.
+    ConstructorCall {
+        name: Str,
+        fields: Definitions<Loc, Str, Pattern>,
+    },
+    /// Variable.
+    Variable { name: Str },
     /// Literal.
     Literal(Literal),
     /// A catch-all pattern.
     Underscore,
 }
 
-/// Parsed expressions and patterns use Rc for recursion.
-/// Consider switching to Arc when going multicore.
-pub type Rec<T> = std::rc::Rc<T>;
+/// Parsed expressions and patterns use Arc for recursion.
+pub type Rec<T> = std::sync::Arc<T>;
