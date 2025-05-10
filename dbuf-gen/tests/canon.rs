@@ -327,7 +327,7 @@ mod tests {
         //     c2 Checker (Suc n) (Cons "a" l)
         //     c3 Checker (Suc Suc n) (Cons "b" (Cons "a" l))
         // }
-        
+
         // broad ast snippet
         // (
         //     "Checker".to_owned(),
