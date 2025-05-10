@@ -6,7 +6,7 @@ pub mod nat {
         // pub(super) use super::super::{};
     }
     
-    #[derive(PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Body {
         Suc {
             pred: deps::Box<Nat>
@@ -16,15 +16,15 @@ pub mod nat {
         }
     }
     
-    #[derive(PartialEq, Eq)]
-    struct Dependencies {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Dependencies {
     
     }
     
-    #[derive(PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Nat {
-        body: Body,
-        dependencies: Dependencies
+        pub body: Body,
+        pub dependencies: Dependencies
     }
     
     impl Nat {
@@ -65,7 +65,7 @@ pub mod vec {
         pub(super) use super::super::{{nat, Nat}};
     }
     
-    #[derive(PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Body {
         Cons {
             val: deps::Box<deps::nat::Nat>,
@@ -76,15 +76,15 @@ pub mod vec {
         }
     }
     
-    #[derive(PartialEq, Eq)]
-    struct Dependencies {
-        n: deps::Box<deps::nat::Nat>
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Dependencies {
+        pub n: deps::Box<deps::nat::Nat>
     }
     
-    #[derive(PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Vec {
-        body: Body,
-        dependencies: Dependencies
+        pub body: Body,
+        pub dependencies: Dependencies
     }
     
     impl Vec {

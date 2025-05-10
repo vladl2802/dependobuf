@@ -9,3 +9,4 @@ pretty = "=0.12.3"
 
 [dev-dependencies]
 dbuf-rust-runtime = { path = "../runtime/dbuf-rust-runtime" }
+pretty_assertions = "1.4.1"

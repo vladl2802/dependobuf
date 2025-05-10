@@ -1,11 +1,7 @@
-// those test are not quite accurate, generated code does not compile yet
-// but it's really close to be compiled, there only two problems now:
-// - missing prelude with needed generic types like Box, ConstructorError and Message
-// - type expression do not acknowledge deps module
-
 mod tests {
     use dbuf_core::ast::elaborated as e;
     use dbuf_gen::codegen;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn basic() {
@@ -202,7 +198,7 @@ mod tests {
         assert!(codegen::generate_module(module, &mut writer).is_ok());
 
         let code = String::from_utf8(writer).expect("generated code must be correct utf8");
-        println!("{}", code);
+        // println!("{}", code);
 
         let expected = include_str!("./canon/nat_vec.rs");
 

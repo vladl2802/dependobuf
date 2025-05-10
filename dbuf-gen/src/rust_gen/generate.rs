@@ -389,7 +389,7 @@ mod type_declaration {
                 .expect("couldn't get Dependencies type");
 
             let message_struct = alloc
-                .text("#[derive(PartialEq, Eq)]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
                 .append(alloc.hardline())
                 .append("pub struct")
                 .append(alloc.space())
@@ -407,10 +407,13 @@ mod type_declaration {
                                 ]
                                 .into_iter()
                                 .map(|(field, ty)| {
-                                    field
-                                        .to_doc(ctx)
+                                    alloc
+                                        .text("pub")
+                                        .append(alloc.space())
+                                        .append(field.to_doc(ctx))
                                         .append(":")
-                                        .append(alloc.space().append(ty.to_doc(ctx)))
+                                        .append(alloc.space())
+                                        .append(ty.to_doc(ctx))
                                 }),
                                 alloc.text(",").append(alloc.hardline()),
                             ),
@@ -502,7 +505,7 @@ mod type_declaration {
                 ast::TypeKind::Enum => "enum",
             };
             alloc
-                .text("#[derive(PartialEq, Eq)]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
                 .append(alloc.hardline())
                 .append(format!("pub {}", holder))
                 .append(alloc.space())
@@ -528,8 +531,10 @@ mod type_declaration {
                 .insert_object_auto_name(objects::Type::from_name("Dependencies".to_owned()));
 
             alloc
-                .text("#[derive(PartialEq, Eq)]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
                 .append(alloc.hardline())
+                .append("pub")
+                .append(alloc.space())
                 .append("struct")
                 .append(alloc.space())
                 .append(dependencies_type.to_doc(ctx))
@@ -543,10 +548,12 @@ mod type_declaration {
                                 self.dependencies
                                     .iter()
                                     .map(|symbol| {
-                                        symbol.clone().generate_as_field_declaration((
-                                            ctx,
-                                            &mut dependencies_namespace,
-                                        ))
+                                        alloc.text("pub").append(alloc.space()).append(
+                                            symbol.clone().generate_as_field_declaration((
+                                                ctx,
+                                                &mut dependencies_namespace,
+                                            )),
+                                        )
                                     })
                                     .collect::<Vec<_>>(),
                                 alloc.hardline(),

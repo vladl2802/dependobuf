@@ -6,7 +6,7 @@ pub mod nat {
         // pub(super) use super::super::{};
     }
     
-    #[derive(PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Body {
         Suc {
             pred: deps::Box<Nat>
@@ -16,15 +16,15 @@ pub mod nat {
         }
     }
     
-    #[derive(PartialEq, Eq)]
-    struct Dependencies {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Dependencies {
     
     }
     
-    #[derive(PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Nat {
-        body: Body,
-        dependencies: Dependencies
+        pub body: Body,
+        pub dependencies: Dependencies
     }
     
     impl Nat {
