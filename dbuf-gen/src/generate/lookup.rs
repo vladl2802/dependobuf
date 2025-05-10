@@ -8,7 +8,7 @@ pub enum LookupResult<Key, Result> {
     Stop(Result),
 }
 
-pub trait NodeCursor<Value, Key: Eq + Hash>: Sized + Clone {
+pub trait NodeCursor<Value, Key>: Sized + Clone {
     fn node(&self) -> &Node<Key, Value>;
 }
 

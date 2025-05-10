@@ -6,20 +6,20 @@ use super::{
 };
 
 #[derive(Debug)]
-struct Edge<'parent, Key: Eq + Hash, Value> {
+struct Edge<'parent, Key, Value> {
     associated_with: Key,
     generated: &'parent mut Node<Key, Value>,
     edge: Option<&'parent Edge<'parent, Key, Value>>,
 }
 
 #[derive(Debug)]
-pub struct NamespaceTree<'parent, Key: Eq + Hash, Value> {
+pub struct NamespaceTree<'parent, Key, Value> {
     generated: Node<Key, Value>,
     edge: Option<Edge<'parent, Key, Value>>,
 }
 
 #[derive(Clone, Copy)]
-enum TreeCursorImpl<'me, Key: Eq + Hash, Value> {
+enum TreeCursorImpl<'me, Key, Value> {
     InTree {
         object: &'me Node<Key, Value>,
         associated_with: &'me Key,
@@ -31,7 +31,7 @@ enum TreeCursorImpl<'me, Key: Eq + Hash, Value> {
 }
 
 #[derive(Clone, Copy)]
-pub struct NamespaceCursor<'me, Key: Eq + Hash, Value>(TreeCursorImpl<'me, Key, Value>);
+pub struct NamespaceCursor<'me, Key, Value>(TreeCursorImpl<'me, Key, Value>);
 
 impl<'parent, Key: Eq + Hash + Clone, Value: Clone> NamespaceTree<'parent, Key, Value> {
     pub fn root(detail: Value) -> Self {
@@ -137,17 +137,18 @@ impl<'me, Key: Eq + Hash, Value> TreeCursorImpl<'me, Key, Value> {
 
     fn go_back(&self) -> Option<Self> {
         if let TreeCursorImpl::OnStack { object: _, edge } = self {
-            match edge {
-                Some(Edge {
-                    generated,
-                    associated_with: _,
-                    edge,
-                }) => Some(TreeCursorImpl::OnStack {
-                    object: generated,
-                    edge: *edge,
-                }),
-                None => None,
-            }
+            edge.map(
+                |Edge {
+                     associated_with: _,
+                     generated,
+                     edge,
+                 }| {
+                    TreeCursorImpl::OnStack {
+                        object: generated,
+                        edge: *edge,
+                    }
+                },
+            )
         } else {
             panic!("go_back while not on stack is not supported")
         }

@@ -3,7 +3,6 @@ pub(super) use crate::{
         self, BinaryOp, Constructor, Literal, Module, NodeId, OpCall, Symbol, Type, TypeExpression,
         UnaryOp, ValueExpression,
     },
-    // codegen::CodegenContext,
     format::{BoxDoc, DocAllocator, DocBuilder, NEST_UNIT},
     generate::lookup::{Cursor, NodeCursor},
 };

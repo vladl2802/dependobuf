@@ -1,7 +1,7 @@
 use std::{collections::HashMap, hash::Hash};
 
 #[derive(Debug, Clone)]
-pub struct Node<Key: Eq + Hash, Value> {
+pub struct Node<Key, Value> {
     pub(super) nested: HashMap<Key, Self>,
     pub(super) detail: Value,
 }
