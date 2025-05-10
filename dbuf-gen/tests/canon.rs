@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn dependant_messages() {
+    fn dependent_messages() {
         // message Sum (a Int) {}
 
         // message Foo (a Int) (b Int) {
