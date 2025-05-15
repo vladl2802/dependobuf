@@ -22,7 +22,7 @@ impl<'a> Module {
             .collect::<Vec<_>>();
 
         alloc
-            .text("use dbuf_rust_runtime::{Box, ConstructorError};")
+            .text("use dbuf_rust_runtime::{serde, Box, ConstructorError, DeserializeError, Serialize, Deserialize, to_vec, from_slice};")
             .append(alloc.hardline().append(alloc.hardline()))
             .append(alloc.intersperse(types, alloc.hardline()))
             .into_doc()
@@ -42,11 +42,16 @@ impl<'a> Type {
 
         let module = alloc.intersperse(
             [
+                alloc
+                    .text("use super::serde::{self, Serialize, Deserialize};")
+                    .into_doc(),
                 self.generate_dependencies_import((ctx, &mut type_namespace)),
                 self.generate_declaration((ctx, &mut type_namespace)),
                 self.generate_inherent_impl((ctx, &mut type_namespace)),
+                self.generate_serialize_trait_impl((ctx, &mut type_namespace)),
+                self.generate_deserialize_trait_impl((ctx, &mut type_namespace)),
             ],
-            alloc.hardline(),
+            alloc.hardline().append(alloc.hardline()),
         );
 
         drop(type_namespace);
@@ -166,18 +171,39 @@ mod type_dependencies_import {
                     "ConstructorError".to_owned(),
                 ))
                 .expect("couldn't insert ConstructorError");
+            let (deserialize_error_type, _) = namespace
+                .insert_object_preserve_name(objects::Type::from_name(
+                    "DeserializeError".to_owned(),
+                ))
+                .expect("couldn't insert DeserializeError");
+            let (serialize_trait, _) = namespace
+                .insert_object_preserve_name(objects::Type::from_name("Serialize".to_owned()))
+                .expect("couldn't insert Serialize");
+            let (deserialize_trait, _) = namespace
+                .insert_object_preserve_name(objects::Type::from_name("Deserialize".to_owned()))
+                .expect("couldn't insert Deserialize");
+            let (to_vec_function, _) = namespace
+                .insert_object_preserve_name(objects::Function::from_name("to_vec".to_owned()))
+                .expect("couldn't insert Serialize");
+            let (from_slice_function, _) = namespace
+                .insert_object_preserve_name(objects::Function::from_name("from_slice".to_owned()))
+                .expect("couldn't insert Deserialize");
 
             // TODO: get those from module
             let helpers_deps = alloc
                 .text("pub(super) use super::super::{")
-                .append(
-                    alloc.intersperse(
-                        [box_type, constructor_error_type]
-                            .iter()
-                            .map(|generated| generated.to_doc(ctx)),
-                        alloc.text(",").append(alloc.space()),
-                    ),
-                )
+                .append(alloc.intersperse(
+                    [
+                        box_type.to_doc(ctx),
+                        constructor_error_type.to_doc(ctx),
+                        deserialize_error_type.to_doc(ctx),
+                        serialize_trait.to_doc(ctx),
+                        deserialize_trait.to_doc(ctx),
+                        to_vec_function.to_doc(ctx),
+                        from_slice_function.to_doc(ctx),
+                    ],
+                    alloc.text(",").append(alloc.space()),
+                ))
                 .append("};");
 
             let other_type_deps = if dependencies.is_empty() {
@@ -265,7 +291,6 @@ mod type_dependencies_import {
                         .append(alloc.hardline()),
                 )
                 .append("}")
-                .append(alloc.hardline())
                 .into_doc()
         }
 
@@ -389,7 +414,9 @@ mod type_declaration {
                 .expect("couldn't get Dependencies type");
 
             let message_struct = alloc
-                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
+                .append(alloc.hardline())
+                .append("#[serde(crate = \"self::serde\")]")
                 .append(alloc.hardline())
                 .append("pub struct")
                 .append(alloc.space())
@@ -422,11 +449,13 @@ mod type_declaration {
                         .append(alloc.hardline()),
                 )
                 .append("}")
-                .append(alloc.hardline())
                 .into_doc();
 
             alloc
-                .intersperse([body, dependencies, message_struct], alloc.hardline())
+                .intersperse(
+                    [body, dependencies, message_struct],
+                    alloc.hardline().append(alloc.hardline()),
+                )
                 .into_doc()
         }
 
@@ -505,7 +534,9 @@ mod type_declaration {
                 ast::TypeKind::Enum => "enum",
             };
             alloc
-                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
+                .append(alloc.hardline())
+                .append("#[serde(crate = \"self::serde\")]")
                 .append(alloc.hardline())
                 .append(format!("pub {}", holder))
                 .append(alloc.space())
@@ -520,7 +551,6 @@ mod type_declaration {
                         .append(alloc.hardline()),
                 )
                 .append("}")
-                .append(alloc.hardline())
                 .into_doc()
         }
 
@@ -531,7 +561,9 @@ mod type_declaration {
                 .insert_object_auto_name(objects::Type::from_name("Dependencies".to_owned()));
 
             alloc
-                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
+                .append(alloc.hardline())
+                .append("#[serde(crate = \"self::serde\")]")
                 .append(alloc.hardline())
                 .append("pub")
                 .append(alloc.space())
@@ -563,7 +595,6 @@ mod type_declaration {
                         .append(alloc.hardline()),
                 )
                 .append("}")
-                .append(alloc.hardline())
                 .into_doc()
         }
     }
@@ -691,7 +722,7 @@ mod type_inherent_impl {
             let (constructor_func, mut constructor_namespace) =
                 namespace.insert_object_auto_name(objects::Function::from_object(
                     ObjectId(NodeId::id(self), Tag::None),
-                    self.name.clone(),
+                    self.name.to_lowercase(),
                 ));
             let namespace = &mut constructor_namespace;
 
@@ -922,6 +953,170 @@ mod type_inherent_impl {
             // TODO: Now it can be implemented
             ctx.alloc
                 .text("Err(deps::ConstructorError::MismatchedDependencies)")
+                .into_doc()
+        }
+    }
+}
+
+mod type_serde_traits_impl {
+    use super::super::prelude::*;
+
+    impl<'a> Type {
+        pub(super) fn generate_serialize_trait_impl(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (_, mut inherent_impl_namespace) =
+                namespace.insert_object_auto_name(objects::Type::from_object(
+                    ObjectId(NodeId::id(self), Tag::String("serialize_impl")),
+                    "serialize_impl".to_owned(),
+                ));
+
+            let (serialize_func, mut func_namespace) = inherent_impl_namespace
+                .insert_object_preserve_name(objects::Function::from_name("serialize".to_owned()))
+                .expect("couldn't generate method serialize for Serialize trait");
+
+            let (self_param, _) = func_namespace
+                .insert_object_preserve_name(objects::Variable::from_name("self".to_owned()))
+                .expect("couldn't generate parameter self");
+
+            let func_body = alloc
+                .text("deps::to_vec(&")
+                .append(self_param.to_doc(ctx))
+                .append(").unwrap().into_boxed_slice()")
+                .into_doc();
+
+            drop(func_namespace);
+
+            let method = alloc
+                .text("fn")
+                .append(alloc.space())
+                .append(serialize_func.to_doc(ctx))
+                .append("(")
+                .append(self_param.to_doc(ctx))
+                .append(")")
+                .append(alloc.space())
+                .append("->")
+                .append(alloc.space())
+                .append("Box<[u8]>")
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(func_body)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}");
+
+            drop(inherent_impl_namespace);
+
+            alloc
+                .text("impl deps::Serialize for ")
+                .append(
+                    namespace
+                        .get_generated::<objects::Type>(ObjectId(
+                            NodeId::id(self),
+                            Tag::String("type"),
+                        ))
+                        .expect("couldn't get message type")
+                        .0
+                        .to_doc(ctx),
+                )
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(method)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}")
+                .into_doc()
+        }
+
+        pub(super) fn generate_deserialize_trait_impl(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (_, mut inherent_impl_namespace) =
+                namespace.insert_object_auto_name(objects::Type::from_object(
+                    ObjectId(NodeId::id(self), Tag::String("deserialize_impl")),
+                    "deserialize_impl".to_owned(),
+                ));
+
+            let (deserialize_func, mut func_namespace) = inherent_impl_namespace
+                .insert_object_preserve_name(objects::Function::from_name("deserialize".to_owned()))
+                .expect("couldn't generate method serialize for Deserialize trait");
+
+            let (slice_param, _) = func_namespace
+                .insert_object_preserve_name(objects::Variable::from_name("slice".to_owned()))
+                .expect("couldn't generate parameter slice");
+
+            let func_body = alloc
+                .text("deps::from_slice::<Self>(")
+                .append(slice_param.to_doc(ctx))
+                .append(").map_err(|err| err.into())")
+                .into_doc();
+
+            drop(func_namespace);
+
+            let method = alloc
+                .text("fn")
+                .append(alloc.space())
+                .append(deserialize_func.to_doc(ctx))
+                .append("<'a>")
+                .append("(")
+                .append(slice_param.to_doc(ctx))
+                .append(":")
+                .append(alloc.space())
+                .append("&'a [u8]")
+                .append(")")
+                .append(alloc.space())
+                .append("->")
+                .append(alloc.space())
+                .append("Result<Self, deps::DeserializeError>")
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(func_body)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}");
+
+            drop(inherent_impl_namespace);
+
+            alloc
+                .text("impl deps::Deserialize for ")
+                .append(
+                    namespace
+                        .get_generated::<objects::Type>(ObjectId(
+                            NodeId::id(self),
+                            Tag::String("type"),
+                        ))
+                        .expect("couldn't get message type")
+                        .0
+                        .to_doc(ctx),
+                )
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(method)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}")
                 .into_doc()
         }
     }
