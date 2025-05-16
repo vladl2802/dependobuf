@@ -4,3 +4,5 @@ edition = "2024"
 version.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
