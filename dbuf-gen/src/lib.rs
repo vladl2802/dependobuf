@@ -4,4 +4,5 @@ mod format;
 mod generate;
 mod scope;
 
+pub mod kotlin_gen;
 mod rust_gen;
