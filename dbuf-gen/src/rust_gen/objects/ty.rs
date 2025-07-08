@@ -75,8 +75,8 @@ impl<'id> Object<'id> for Type<'id> {
         C: Cursor<(&'c HashMap<RustObject, u64>, &'c GeneratedRustObject), ObjectId<'id>>,
     {
         cursor
-            .lookup(|_, (tags, generated)| match tags.get(&object) {
-                Some(tag) => LookupResult::Stop(Some(tag.clone())),
+            .lookup(|_, (tags, generated)| match tags.get(object) {
+                Some(tag) => LookupResult::Stop(Some(*tag)),
                 None => {
                     if Self::backwards_lookup_limit(generated) {
                         LookupResult::Stop(None)
@@ -168,4 +168,4 @@ impl TryFrom<&GeneratedRustObject> for GeneratedType {
     }
 }
 
-impl<'me> GeneratedObject<'me> for GeneratedType {}
+impl GeneratedObject<'_> for GeneratedType {}

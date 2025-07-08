@@ -4,7 +4,7 @@ use std::{
     hash::Hash,
 };
 
-/// HashMap wrapper that supports natural for the scopes nesting
+/// `HashMap` wrapper that supports natural for the scopes nesting
 #[derive(Debug)]
 pub struct Scope<'a, Key, Value>
 where
@@ -15,6 +15,7 @@ where
     map: HashMap<Key, Value>,
 }
 
+#[allow(dead_code, reason = "??? (some methods are never used)")]
 impl<'a, Key, Value> Scope<'a, Key, Value>
 where
     Key: Hash + Eq,

@@ -126,6 +126,7 @@ mod type_dependencies_import {
     use std::{collections::HashSet, iter, rc::Rc};
 
     impl<'a> Type {
+        #[allow(clippy::too_many_lines, reason = "??? (144/100)")]
         pub(super) fn generate_dependencies_import(
             &self,
             (ctx, namespace): MutContext<'a, '_, '_>,
@@ -149,15 +150,13 @@ mod type_dependencies_import {
                     } = constructor.as_ref();
                     let implicits = implicits.iter().map(Self::symbol_dependencies);
                     let fields = fields.iter().map(Self::symbol_dependencies);
-                    iter::once(Self::type_expression_dependencies(&result_type))
+                    iter::once(Self::type_expression_dependencies(result_type))
                         .chain(implicits)
                         .chain(fields)
-                        .into_iter()
                         .flatten()
                         .collect()
                 })
                 .chain(self.dependencies.iter().map(Self::symbol_dependencies))
-                .into_iter()
                 .flatten()
                 .collect::<HashSet<_>>();
 
@@ -257,11 +256,11 @@ mod type_dependencies_import {
                         drop(message_type);
 
                         namespace.insert_tree(
-                            ObjectId(node_id.clone(), Tag::String("module")),
+                            &ObjectId(node_id.clone(), Tag::String("module")),
                             message_module_node,
                         );
                         namespace.insert_tree(
-                            ObjectId(node_id.clone(), Tag::String("type")),
+                            &ObjectId(node_id.clone(), Tag::String("type")),
                             message_type_node,
                         );
 
@@ -304,11 +303,7 @@ mod type_dependencies_import {
                         iter::once(NodeId::id_weak(call)).collect()
                     };
                     iter::once(name_deps)
-                        .chain(
-                            dependencies
-                                .into_iter()
-                                .map(Self::value_expression_dependencies),
-                        )
+                        .chain(dependencies.iter().map(Self::value_expression_dependencies))
                         .flatten()
                         .collect()
                 }
@@ -334,13 +329,9 @@ mod type_dependencies_import {
                     implicits,
                     arguments,
                 } => implicits
-                    .into_iter()
+                    .iter()
                     .map(Self::value_expression_dependencies)
-                    .chain(
-                        arguments
-                            .into_iter()
-                            .map(Self::value_expression_dependencies),
-                    )
+                    .chain(arguments.iter().map(Self::value_expression_dependencies))
                     .collect(),
                 ValueExpression::Variable(symbol) => {
                     vec![Self::symbol_dependencies(
@@ -357,14 +348,7 @@ mod type_dependencies_import {
 
         // TODO: move this to more appropriate place
         fn is_primitive_type(name: &str) -> bool {
-            match name {
-                "Bool" => true,
-                "Double" => true,
-                "Int" => true,
-                "UInt" => true,
-                "String" => true,
-                _ => false,
-            }
+            matches!(name, "Bool" | "Double" | "Int" | "UInt" | "String")
         }
     }
 }
@@ -386,14 +370,14 @@ mod type_declaration {
                 self.name.clone(),
             );
             let name = namespace.name_object(&message_type_object);
-            let (_, _) = namespace.insert_object(message_type_object.clone(), name.clone());
+            let (_, _) = namespace.insert_object(message_type_object.clone(), &name);
 
             let body = self.generate_body((ctx, namespace));
             let dependencies = self.generate_dependencies((ctx, namespace));
 
-            let _ = namespace.remove_tree(ObjectId(NodeId::id(self), Tag::String("type")));
+            let _ = namespace.remove_tree(&ObjectId(NodeId::id(self), Tag::String("type")));
             let (message_type_name, mut message_type_namespace) =
-                namespace.insert_object(message_type_object, name);
+                namespace.insert_object(message_type_object, &name);
 
             let (body_field, _) = message_type_namespace
                 .insert_object_preserve_name(objects::Variable::from_name("body".to_owned()))
@@ -538,7 +522,7 @@ mod type_declaration {
                 .append(alloc.hardline())
                 .append("#[serde(crate = \"self::serde\")]")
                 .append(alloc.hardline())
-                .append(format!("pub {}", holder))
+                .append(format!("pub {holder}"))
                 .append(alloc.space())
                 .append(body_type.to_doc(ctx))
                 .append(alloc.space())
@@ -627,30 +611,26 @@ impl<'a> Type {
             .append(
                 alloc
                     .hardline()
-                    .append(
-                        alloc.intersperse(
-                            self.dependencies.iter().zip(values.into_iter()).map(
-                                |(symbol, value)| {
-                                    let (field, _) = dependencies_cursor
-                                        .clone()
-                                        .get_generated::<objects::Variable>(ObjectId(
-                                            NodeId::id_rc(symbol),
-                                            Tag::None,
-                                        ))
-                                        .expect("couldn't get Dependencies field");
+                    .append(alloc.intersperse(
+                        self.dependencies.iter().zip(values).map(|(symbol, value)| {
+                            let (field, _) = dependencies_cursor
+                                .clone()
+                                .get_generated::<objects::Variable>(ObjectId(
+                                    NodeId::id_rc(symbol),
+                                    Tag::None,
+                                ))
+                                .expect("couldn't get Dependencies field");
 
-                                    field
-                                        .to_doc(ctx)
-                                        .append(":")
-                                        .append(alloc.space())
-                                        .append("Box::new(")
-                                        .append(value)
-                                        .append(")")
-                                },
-                            ),
-                            alloc.text(",").append(alloc.hardline()),
-                        ),
-                    )
+                            field
+                                .to_doc(ctx)
+                                .append(":")
+                                .append(alloc.space())
+                                .append("Box::new(")
+                                .append(value)
+                                .append(")")
+                        }),
+                        alloc.text(",").append(alloc.hardline()),
+                    ))
                     .nest(NEST_UNIT)
                     .append(alloc.hardline()),
             )
@@ -713,6 +693,7 @@ mod type_inherent_impl {
     }
 
     impl<'a> Constructor {
+        #[allow(clippy::too_many_lines, reason = "??? (128/100)")]
         pub fn generate_constructor_declaration(
             &self,
             (ctx, namespace): MutContext<'a, '_, '_>,
@@ -841,7 +822,7 @@ mod type_inherent_impl {
                 .append(dependencies_var.to_doc(ctx))
                 .append(" })");
             alloc
-                .text(format!("pub fn",))
+                .text("pub fn".to_string())
                 .append(alloc.space())
                 .append(constructor_func.to_doc(ctx))
                 .append("(")
@@ -1231,8 +1212,8 @@ mod value_from_expression {
                 'cursor,
                 impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
             >,
-            implicits: &Vec<ValueExpression>,
-            arguments: &Vec<ValueExpression>,
+            implicits: &[ValueExpression],
+            arguments: &[ValueExpression],
         ) -> BoxDoc<'a> {
             assert!(arguments.len() == self.fields.len());
 
@@ -1278,7 +1259,7 @@ mod value_from_expression {
                                 .expect("expected function")
                                 .to_doc(ctx),
                         ),
-                    )
+                    );
                 });
 
             constructor_func
@@ -1358,27 +1339,22 @@ impl<'a> Constructor {
             .append(
                 alloc
                     .hardline()
-                    .append(
-                        alloc.intersperse(
-                            self.fields
-                                .iter()
-                                .zip(fields.into_iter())
-                                .map(|(field, value)| {
-                                    constructor_namespace
-                                        .clone()
-                                        .get_generated::<objects::Variable>(ObjectId(
-                                            NodeId::id_rc(field),
-                                            Tag::None,
-                                        ))
-                                        .expect("couldn't find body constructor field")
-                                        .0
-                                        .to_doc(ctx)
-                                        .append(": ")
-                                        .append(value)
-                                }),
-                            alloc.text(",").append(alloc.hardline()),
-                        ),
-                    )
+                    .append(alloc.intersperse(
+                        self.fields.iter().zip(fields).map(|(field, value)| {
+                            constructor_namespace
+                                .clone()
+                                .get_generated::<objects::Variable>(ObjectId(
+                                    NodeId::id_rc(field),
+                                    Tag::None,
+                                ))
+                                .expect("couldn't find body constructor field")
+                                .0
+                                .to_doc(ctx)
+                                .append(": ")
+                                .append(value)
+                        }),
+                        alloc.text(",").append(alloc.hardline()),
+                    ))
                     .nest(NEST_UNIT)
                     .append(alloc.hardline()),
             )
@@ -1388,7 +1364,7 @@ impl<'a> Constructor {
     }
 }
 
-impl<'a, 'b> Symbol {
+impl<'a> Symbol {
     pub fn generate_as_field_declaration(
         self: Rc<Self>,
         (ctx, namespace): MutContext<'a, '_, '_>,
@@ -1459,7 +1435,7 @@ impl<'a> Type {
                         objects::GeneratedModule::try_from(generated)
                             .expect("expected module")
                             .to_doc(ctx),
-                    )
+                    );
                 })
                 .lookup_generated::<objects::Module>(ObjectId(
                     NodeId::id(self),
@@ -1472,7 +1448,7 @@ impl<'a> Type {
                                 .expect("expected module")
                                 .to_doc(ctx),
                         ),
-                    )
+                    );
                 });
             Some((path.unwrap().append("::"), cursor))
         }

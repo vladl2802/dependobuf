@@ -76,7 +76,7 @@ impl<'id> Object<'id> for Module<'id> {
     {
         cursor
             .lookup(|_, (tags, generated)| match tags.get(object) {
-                Some(tag) => LookupResult::Stop(Some(tag.clone())),
+                Some(tag) => LookupResult::Stop(Some(*tag)),
                 None => {
                     if Self::backwards_lookup_limit(generated) {
                         LookupResult::Stop(None)
@@ -168,4 +168,4 @@ impl TryFrom<&GeneratedRustObject> for GeneratedModule {
     }
 }
 
-impl<'me> GeneratedObject<'me> for GeneratedModule {}
+impl GeneratedObject<'_> for GeneratedModule {}

@@ -21,9 +21,8 @@ fn get_range(line: u32, character: u32, len: u32) -> Range {
 }
 
 fn get_definition_length(name: &str) -> u32 {
-    name.rfind(':')
-        .map(|p| name.len() - p - 1)
-        .unwrap_or(name.len()) as u32
+    let length = name.rfind(':').map_or(name.len(), |p| name.len() - p - 1);
+    u32::try_from(length).unwrap()
 }
 
 fn get_definition(name: &'static str, line: u32, character: u32) -> (&'static str, Range) {
@@ -33,7 +32,7 @@ fn get_definition(name: &'static str, line: u32, character: u32) -> (&'static st
     )
 }
 
-const DEFINITIONS: LazyLock<HashMap<&'static str, Range>> = LazyLock::new(|| {
+static DEFINITIONS: LazyLock<HashMap<&'static str, Range>> = LazyLock::new(|| {
     HashMap::from([
         get_definition("M1", 0, 8),
         get_definition("M1:d1", 0, 12),
@@ -174,8 +173,7 @@ fn check_jump(j: &JumpingPoint) {
         if let GotoDefinitionResponse::Scalar(l) = r {
             let range = l.range;
 
-            let d = DEFINITIONS;
-            let expect = d.get(j.to);
+            let expect = DEFINITIONS.get(j.to);
 
             assert!(expect.is_some(), "definition {:?} not found", j.to);
             let expect = expect.unwrap();
@@ -216,8 +214,7 @@ fn check_type_definition_jump(j: &JumpingPoint) {
         if let GotoDefinitionResponse::Scalar(l) = r {
             let range = l.range;
 
-            let d = DEFINITIONS;
-            let expect = d.get(j.type_name);
+            let expect = DEFINITIONS.get(j.type_name);
 
             assert!(expect.is_some(), "definition {:?} not found", j.type_name);
             let expect = expect.unwrap();

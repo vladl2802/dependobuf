@@ -1,5 +1,3 @@
-use serde_json;
-
 #[derive(Debug)]
 pub enum ConstructorError {
     MismatchedDependencies,
@@ -11,6 +9,7 @@ pub use serde;
 
 pub use serde_json::{from_slice, to_vec};
 
+#[allow(dead_code, reason = "Deserialization is not ready")]
 pub struct DeserializeError(serde_json::Error);
 
 impl From<serde_json::Error> for DeserializeError {
@@ -24,5 +23,8 @@ pub trait Serialize {
 }
 
 pub trait Deserialize: Sized {
-    fn deserialize<'a>(slice: &'a [u8]) -> Result<Self, DeserializeError>;
+    /// # Errors
+    ///
+    /// TODO: explain when `DeserializeError` is returned.
+    fn deserialize(slice: &[u8]) -> Result<Self, DeserializeError>;
 }

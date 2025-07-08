@@ -88,7 +88,10 @@ pub mod parser_impl;
 type ParsedModule = Module<Location<Offset>, String>;
 type ParseError<'src> = Rich<'src, Token, SimpleSpan<Offset>>;
 
-pub fn parse<'src>(input: &'src str) -> Result<ParsedModule, Vec<ParseError<'src>>> {
+/// # Errors
+///
+/// TODO: explain when `Err` is returned.
+pub fn parse(input: &str) -> Result<ParsedModule, Vec<ParseError<'_>>> {
     let lexer = Token::lexer(input);
 
     let token_iter = lexer.located().map(move |(tok, span)| match tok {
