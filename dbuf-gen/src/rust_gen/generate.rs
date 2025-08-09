@@ -1596,21 +1596,17 @@ mod type_inherent_impl {
         ) -> BoxDoc<'a> {
             let alloc = ctx.alloc;
 
-            let implicits = if is_enum_constructor {
-                self.implicits
-                    .iter()
-                    .map(|implicit| {
-                        namespace
-                            .get_generated::<objects::Variable>(objects::ObjectId(
-                                ast::NodeId::id_rc(implicit),
-                                objects::Tag::None,
-                            ))
-                            .expect("couldn't get generated implicit")
-                            .0
-                            .to_doc(ctx)
-                    })
-                    .collect::<Vec<_>>()
-            } else {
+            let (dependencies_param, _) = namespace
+                    .get_generated::<objects::Variable>(ObjectId::from_name(
+                        "dependencies".to_owned(),
+                    ))
+                    .expect("couldn't get generated dependencies parameter");
+
+            let (ty, result_type_dependencies) = match &self.result_type {
+                TypeExpression::Type { call, dependencies } => (call.upgrade().expect("call to unknown type") , dependencies),
+            };
+
+            if is_enum_constructor {
                 let (dependencies_param, _) = namespace
                     .get_generated::<objects::Variable>(ObjectId::from_name(
                         "dependencies".to_owned(),
@@ -1621,24 +1617,81 @@ mod type_inherent_impl {
                     .get_generated::<objects::Type>(ObjectId::from_name("Dependencies".to_owned()))
                     .expect("couldn't get generated Dependencies type");
 
-                let (_, implicits_extractor_if_scope) =
+                let dependencies = ty.dependencies.iter().map(|dependency| {
+                    dependencies_param.to_doc(ctx).append(".").append(dependencies_type_cursor.clone().get_generated::<objects::Variable>(objects::ObjectId(ast::NodeId::id_rc(dependency), objects::Tag::None)).expect("couldn't get generated dependency").0.to_doc(ctx)).append(".").append("body")
+                }).collect::<Vec<_>>();
+
+                drop(dependencies_type_cursor);
+
+                let (_, mut implicits_extractor_if_scope) =
                     namespace.insert_object_auto_name(objects::Scope::new(
                         objects::ObjectId::from_name("implicits_extractor".to_owned()),
                     ));
 
-                // alloc
-                //     .text("if")
-                //     .append(alloc.space())
-                //     .append("let")
-                //     .append(alloc.space())
-                //     .append()
+                let implicits_extracting_patterns = result_type_dependencies.iter().map(|dependency| {
+                    dependency.generate_as_pattern((ctx, &mut implicits_extractor_if_scope))
+                }).collect::<Vec<_>>();
 
-                todo!()
-            };
+                let implicits = self.implicits
+                    .iter()
+                    .map(|implicit| {
+                        implicits_extractor_if_scope
+                            .get_generated::<objects::Variable>(objects::ObjectId(
+                                ast::NodeId::id_rc(implicit),
+                                objects::Tag::None,
+                            ))
+                            .expect("couldn't get generated implicit")
+                            .0
+                            .to_doc(ctx)
+                    })
+                    .collect::<Vec<_>>();
 
-            if is_enum_constructor {
-                todo!()
+                alloc
+                    .text("if")
+                    .append(alloc.space())
+                    .append("let")
+                    .append(alloc.space())
+                    .append("(")
+                    .append(alloc.intersperse(implicits_extracting_patterns, alloc.text(",").append(alloc.space())))
+                    .append(")")
+                    .append(alloc.space())
+                    .append("=")
+                    .append(alloc.space())
+                    .append("(")
+                    .append(alloc.intersperse(dependencies, alloc.text(",").append(alloc.space())))
+                    .append(")")
+                    .append(alloc.space())
+                    .append("{")
+                    .append(
+                        alloc
+                                .hardline()
+                                .append(self.generate_constructor_call((ctx, &mut implicits_extractor_if_scope), implicits))
+                                .append(alloc.hardline())
+                    )
+                    .append("}")
+                    .append(alloc.space())
+                    .append("else")
+                    .append(alloc.space())
+                    .append("{")
+                    .append(alloc.hardline().append("Err(super::DeserializeError::DependenciesDescriptorMismatch)").append(alloc.hardline()))
+                    .append("}")
+                    .into_doc()
             } else {
+                let implicits = self.implicits
+                    .iter()
+                    .map(|implicit| {
+                        dependencies_param.to_doc(ctx).append(".").append(
+                        namespace
+                            .get_generated::<objects::Variable>(objects::ObjectId(
+                                ast::NodeId::id_rc(implicit),
+                                objects::Tag::None,
+                            ))
+                            .expect("couldn't get generated implicit")
+                            .0
+                            .to_doc(ctx))
+                    })
+                    .collect::<Vec<_>>();
+
                 self.generate_constructor_call((ctx, namespace), implicits)
             }
         }
@@ -2203,7 +2256,7 @@ impl<'a> ValueExpression {
         let alloc = ctx.alloc;
 
         match self {
-            ValueExpression::OpCall(op_call) => {
+            ValueExpression::OpCall(_) => {
                 panic!("OpCall's are currently not supported in patterns")
             }
             ValueExpression::Constructor {
@@ -2213,7 +2266,7 @@ impl<'a> ValueExpression {
             } => {
                 let call = call.upgrade().expect("call to unknown constructor");
                 let ty = match &call.result_type {
-                    TypeExpression::Type { call, dependencies } => {
+                    TypeExpression::Type { call, dependencies: _ } => {
                         call.upgrade().expect("call to unknown type constructor")
                     }
                 };
