@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{fmt::Arguments, rc::Rc};
 
 use super::prelude::*;
 
@@ -22,8 +22,15 @@ impl<'a> Module {
             .collect::<Vec<_>>();
 
         alloc
-            .text("use dbuf_rust_runtime::{serde, Box, ConstructorError, DeserializeError, Serialize, Deserialize, to_vec, from_slice};")
-            .append(alloc.hardline().append(alloc.hardline()))
+            .intersperse(
+                [
+                    "use dbuf_rust_runtime::{Box, ConstructorError, DeserializeError};",
+                    "use std::io::{Write, Read, Error};",
+                    "use std::slice;",
+                ],
+                alloc.hardline(),
+            )
+            .append(alloc.hardline())
             .append(alloc.intersperse(types, alloc.hardline()))
             .into_doc()
     }
@@ -40,19 +47,17 @@ impl<'a> Type {
             ))
             .expect("couldn't generate type module");
 
-        let module = alloc.intersperse(
-            [
-                alloc
-                    .text("use super::serde::{self, Serialize, Deserialize};")
-                    .into_doc(),
-                self.generate_dependencies_import((ctx, &mut type_namespace)),
-                self.generate_declaration((ctx, &mut type_namespace)),
-                self.generate_inherent_impl((ctx, &mut type_namespace)),
-                self.generate_serialize_trait_impl((ctx, &mut type_namespace)),
-                self.generate_deserialize_trait_impl((ctx, &mut type_namespace)),
-            ],
-            alloc.hardline().append(alloc.hardline()),
-        );
+        let mut module_parts = Vec::new();
+        module_parts.push(self.generate_dependencies_import((ctx, &mut type_namespace)));
+        if let Some(descriptor_module) =
+            self.generate_enum_descriptor_module((ctx, &mut type_namespace))
+        {
+            module_parts.push(descriptor_module)
+        }
+        module_parts.push(self.generate_declaration((ctx, &mut type_namespace)));
+        module_parts.push(self.generate_inherent_impl((ctx, &mut type_namespace)));
+
+        let module = alloc.intersperse(module_parts, alloc.hardline());
 
         drop(type_namespace);
 
@@ -162,49 +167,6 @@ mod type_dependencies_import {
 
             dependencies.remove(&NodeId::id(self)); // don't need to return self name
 
-            let (box_type, _) = namespace
-                .insert_object_preserve_name(objects::Type::from_name("Box".to_owned()))
-                .expect("couldn't insert Box");
-            let (constructor_error_type, _) = namespace
-                .insert_object_preserve_name(objects::Type::from_name(
-                    "ConstructorError".to_owned(),
-                ))
-                .expect("couldn't insert ConstructorError");
-            let (deserialize_error_type, _) = namespace
-                .insert_object_preserve_name(objects::Type::from_name(
-                    "DeserializeError".to_owned(),
-                ))
-                .expect("couldn't insert DeserializeError");
-            let (serialize_trait, _) = namespace
-                .insert_object_preserve_name(objects::Type::from_name("Serialize".to_owned()))
-                .expect("couldn't insert Serialize");
-            let (deserialize_trait, _) = namespace
-                .insert_object_preserve_name(objects::Type::from_name("Deserialize".to_owned()))
-                .expect("couldn't insert Deserialize");
-            let (to_vec_function, _) = namespace
-                .insert_object_preserve_name(objects::Function::from_name("to_vec".to_owned()))
-                .expect("couldn't insert Serialize");
-            let (from_slice_function, _) = namespace
-                .insert_object_preserve_name(objects::Function::from_name("from_slice".to_owned()))
-                .expect("couldn't insert Deserialize");
-
-            // TODO: get those from module
-            let helpers_deps = alloc
-                .text("pub(super) use super::super::{")
-                .append(alloc.intersperse(
-                    [
-                        box_type.to_doc(ctx),
-                        constructor_error_type.to_doc(ctx),
-                        deserialize_error_type.to_doc(ctx),
-                        serialize_trait.to_doc(ctx),
-                        deserialize_trait.to_doc(ctx),
-                        to_vec_function.to_doc(ctx),
-                        from_slice_function.to_doc(ctx),
-                    ],
-                    alloc.text(",").append(alloc.space()),
-                ))
-                .append("};");
-
             let other_type_deps = if dependencies.is_empty() {
                 alloc.text("// ")
             } else {
@@ -283,9 +245,7 @@ mod type_dependencies_import {
                 .append(
                     alloc
                         .hardline()
-                        .append(
-                            alloc.intersperse([helpers_deps, other_type_deps], alloc.hardline()),
-                        )
+                        .append(alloc.intersperse([other_type_deps], alloc.hardline()))
                         .nest(NEST_UNIT)
                         .append(alloc.hardline()),
                 )
@@ -349,6 +309,116 @@ mod type_dependencies_import {
         // TODO: move this to more appropriate place
         fn is_primitive_type(name: &str) -> bool {
             matches!(name, "Bool" | "Double" | "Int" | "UInt" | "String")
+        }
+    }
+}
+
+mod enum_descriptor_mod {
+    use super::super::prelude::*;
+
+    impl<'a> Type {
+        pub(super) fn generate_enum_descriptor_module(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> Option<BoxDoc<'a>> {
+            let alloc = ctx.alloc;
+
+            if matches!(self.kind, ast::TypeKind::Message) {
+                return None;
+            }
+
+            let (descriptor_module, mut descriptor_module_namepspace) = namespace
+                .insert_object_preserve_name(objects::Module::from_object(
+                    objects::ObjectId(
+                        ast::NodeId::owned("descriptor".to_owned()),
+                        objects::Tag::String("module"),
+                    ),
+                    "descriptor".to_owned(),
+                ))
+                .expect("couldn't insert descriptor module");
+
+            Some(
+                alloc
+                    .text("mod")
+                    .append(alloc.space())
+                    .append(descriptor_module.to_doc(ctx))
+                    .append(alloc.space())
+                    .append("{")
+                    .append(
+                        alloc
+                            .hardline()
+                            .append(
+                                alloc.intersperse(
+                                    self.constructors.iter().enumerate().map(
+                                        |(index, constructor)| {
+                                            let (construct_descriptor_name, _) =
+                                                descriptor_module_namepspace
+                                                    .insert_object_preserve_name(
+                                                        objects::Variable::from_name(
+                                                            constructor.name.clone(),
+                                                        ),
+                                                    )
+                                                    .expect("couldn't insert descriptor variable");
+                                            alloc
+                                                .text("pub(super)")
+                                                .append(alloc.space())
+                                                .append("const")
+                                                .append(alloc.space())
+                                                .append(construct_descriptor_name.to_doc(ctx))
+                                                .append(":")
+                                                .append(alloc.space())
+                                                .append("u8")
+                                                .append(alloc.space())
+                                                .append("=")
+                                                .append(alloc.space())
+                                                .append(index.to_string())
+                                                .append(";")
+                                        },
+                                    ),
+                                    alloc.hardline(),
+                                ),
+                            )
+                            .nest(NEST_UNIT)
+                            .append(alloc.hardline()),
+                    )
+                    .append("}")
+                    .into_doc(),
+            )
+        }
+    }
+
+    impl<'a> Constructor {
+        pub(super) fn generate_enum_descriptor<'cursor>(
+            &self,
+            (ctx, namespace): Context<
+                'a,
+                'cursor,
+                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            >,
+        ) -> Option<BoxDoc<'a>> {
+            let ty = self.result_type.get_type();
+
+            if matches!(ty.kind, ast::TypeKind::Message) {
+                return None;
+            }
+
+            let (descriptor_module, descriptor_cursor) = namespace
+                .get_generated::<objects::Module>(
+                    objects::ObjectId::from_name("descriptor".to_owned())
+                        .with_tag(objects::Tag::String("module")),
+                )
+                .expect("couldn't get generated descriptor module");
+
+            let (descriptor_variable, _) = descriptor_cursor
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name(self.name.clone()))
+                .expect("couldn't get generated descriptor variable");
+
+            Some(
+                descriptor_module
+                    .to_doc(ctx)
+                    .append("::")
+                    .append(descriptor_variable.to_doc(ctx)),
+            )
         }
     }
 }
@@ -639,6 +709,8 @@ impl<'a> Type {
 }
 
 mod type_inherent_impl {
+    use std::iter;
+
     use super::super::prelude::*;
 
     impl<'a> Type {
@@ -648,11 +720,9 @@ mod type_inherent_impl {
         ) -> BoxDoc<'a> {
             let alloc = ctx.alloc;
 
-            let (_, mut inherent_impl_namespace) =
-                namespace.insert_object_auto_name(objects::Type::from_object(
-                    ObjectId(NodeId::id(self), Tag::String("inherent_impl")),
-                    "inherent_impl".to_owned(),
-                ));
+            let (_, mut inherent_impl_namespace) = namespace.insert_object_auto_name(
+                objects::Scope::new(ObjectId(NodeId::id(self), Tag::String("inherent_impl"))),
+            );
 
             let constructors = self
                 .constructors
@@ -662,6 +732,11 @@ mod type_inherent_impl {
                         .generate_constructor_declaration((ctx, &mut inherent_impl_namespace))
                 })
                 .collect::<Vec<_>>();
+
+            let serialize_function =
+                self.generate_serialize_function_declaration((ctx, &mut inherent_impl_namespace));
+            let deserilize_function =
+                self.generate_deserialize_function_declaration((ctx, &mut inherent_impl_namespace));
 
             drop(inherent_impl_namespace);
 
@@ -683,7 +758,15 @@ mod type_inherent_impl {
                 .append(
                     alloc
                         .hardline()
-                        .append(alloc.intersperse(constructors, alloc.hardline()))
+                        .append(
+                            alloc.intersperse(
+                                constructors
+                                    .into_iter()
+                                    .chain(iter::once(serialize_function))
+                                    .chain(iter::once(deserilize_function)),
+                                alloc.hardline(),
+                            ),
+                        )
                         .nest(NEST_UNIT)
                         .append(alloc.hardline()),
                 )
@@ -694,7 +777,7 @@ mod type_inherent_impl {
 
     impl<'a> Constructor {
         #[allow(clippy::too_many_lines, reason = "??? (128/100)")]
-        pub fn generate_constructor_declaration(
+        fn generate_constructor_declaration(
             &self,
             (ctx, namespace): MutContext<'a, '_, '_>,
         ) -> BoxDoc<'a> {
@@ -827,7 +910,7 @@ mod type_inherent_impl {
                 .append(constructor_func.to_doc(ctx))
                 .append("(")
                 .append(alloc.intersperse(params, alloc.text(", ")))
-                .append(") -> Result<Self, deps::ConstructorError> {")
+                .append(") -> Result<Self, super::ConstructorError> {")
                 .append(
                     alloc
                         .hardline()
@@ -930,11 +1013,711 @@ mod type_inherent_impl {
                 impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
             >,
         ) -> BoxDoc<'a> {
-            // Dirty, because doesn't check that deps include this
+            // Dirty, because doesn't check that super include this
             // TODO: Now it can be implemented
             ctx.alloc
-                .text("Err(deps::ConstructorError::MismatchedDependencies)")
+                .text("Err(super::ConstructorError::MismatchedDependencies)")
                 .into_doc()
+        }
+
+        fn generate_body_construction<'cursor>(
+            &self,
+            (ctx, namespace): Context<
+                'a,
+                'cursor,
+                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            >,
+            fields: Vec<BoxDoc<'a>>,
+        ) -> BoxDoc<'a> {
+            assert!(
+                self.fields.len() == fields.len(),
+                "unexpected amount of fields passed in"
+            );
+
+            let alloc = ctx.alloc;
+
+            let (body_type, body_namespace) = namespace
+                .get_generated::<objects::Type>(ObjectId::from_name("Body".to_owned()))
+                .expect("couldn't get Body struct");
+
+            let (constructor, constructor_namespace) = match self.result_type.get_type().kind {
+                ast::TypeKind::Message => (body_type.to_doc(ctx), body_namespace),
+                ast::TypeKind::Enum => {
+                    let (enum_branch, enum_branch_namespace) = body_namespace
+                        .get_generated::<objects::Type>(ObjectId(
+                            NodeId::id(self),
+                            Tag::String("enum_branch"),
+                        ))
+                        .expect("couldn't get enum branch");
+                    (
+                        body_type
+                            .to_doc(ctx)
+                            .append("::")
+                            .append(enum_branch.to_doc(ctx)),
+                        enum_branch_namespace,
+                    )
+                }
+            };
+
+            alloc
+                .text("Ok(")
+                .append(constructor)
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(
+                            alloc.intersperse(
+                                self.fields
+                                    .iter()
+                                    .zip(fields.into_iter())
+                                    .map(|(field, value)| {
+                                        constructor_namespace
+                                            .clone()
+                                            .get_generated::<objects::Variable>(ObjectId(
+                                                NodeId::id_rc(field),
+                                                Tag::None,
+                                            ))
+                                            .expect("couldn't find body constructor field")
+                                            .0
+                                            .to_doc(ctx)
+                                            .append(": ")
+                                            .append(value)
+                                    }),
+                                alloc.text(",").append(alloc.hardline()),
+                            ),
+                        )
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}")
+                .append(")")
+                .into_doc()
+        }
+    }
+
+    impl<'a> Type {
+        fn generate_serialize_function_declaration(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            // TODO: serialize function could overlap with other methods, in future need to separate serilialize/deserialize into separate trait
+            let (serialize_function, mut serialize_function_namespace) = namespace
+                .insert_object_preserve_name(objects::Function::from_name("serialize".to_owned()))
+                .expect("couldn't generate serialize function");
+
+            let (writer_type_parameter, _) = serialize_function_namespace
+                .insert_object_preserve_name(objects::Type::from_name("W".to_owned()))
+                .expect("couldn't generate W type parameter");
+
+            let (self_parameter, _) = serialize_function_namespace
+                .insert_object_preserve_name(objects::Variable::from_name("self".to_owned()))
+                .expect("couldn't generate self function parameter");
+            let (writer_parameter, _) = serialize_function_namespace
+                .insert_object_preserve_name(objects::Variable::from_name("writer".to_owned()))
+                .expect("couldn't generate writer function parameter");
+
+            let function_body = match self.kind {
+                ast::TypeKind::Message => self.generate_serialize_function_body_for_message((
+                    ctx,
+                    &mut serialize_function_namespace,
+                )),
+                ast::TypeKind::Enum => self.generate_serialize_function_body_for_enum((
+                    ctx,
+                    &mut serialize_function_namespace,
+                )),
+            };
+
+            alloc
+                .text("pub")
+                .append(alloc.space())
+                .append("fn")
+                .append(alloc.space())
+                .append(serialize_function.to_doc(ctx))
+                .append("<")
+                .append(
+                    writer_type_parameter
+                        .to_doc(ctx)
+                        .append(":")
+                        .append(alloc.space())
+                        .append("super::Write"),
+                )
+                .append(">") // TODO
+                .append("(")
+                .append(
+                    alloc.intersperse(
+                        [
+                            self_parameter.to_doc(ctx),
+                            writer_parameter
+                                .to_doc(ctx)
+                                .append(":")
+                                .append(alloc.space())
+                                .append("&mut")
+                                .append(alloc.space())
+                                .append(writer_type_parameter.to_doc(ctx)),
+                        ],
+                        alloc.text(",").append(alloc.space()),
+                    ),
+                )
+                .append(")")
+                .append(alloc.space())
+                .append("->")
+                .append(alloc.space())
+                .append("Result")
+                .append("<")
+                .append(alloc.intersperse(
+                    ["()", "super::Error"],
+                    alloc.text(",").append(alloc.space()),
+                ))
+                .append(">")
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(function_body)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}")
+                .into_doc()
+        }
+
+        fn generate_serialize_function_body_for_enum(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (writer_parameter, _) = namespace
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name(
+                    "writer".to_owned(),
+                ))
+                .expect("couldn't get generated writer parameter");
+            let (self_parameter, _) = namespace
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name("self".to_owned()))
+                .expect("couldn't get generated self parameter");
+            let (message_type_body_field, _) = namespace
+                .get_generated::<objects::Type>(objects::ObjectId(
+                    ast::NodeId::id(self),
+                    objects::Tag::String("type"),
+                ))
+                .expect("couldn't get generated message type")
+                .1
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name("body".to_owned()))
+                .expect("couldn't get generated message type 'body' field");
+
+            alloc
+                .text("match")
+                .append(alloc.space())
+                .append(self_parameter.to_doc(ctx))
+                .append(".")
+                .append(message_type_body_field.to_doc(ctx))
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(alloc.concat(self.constructors.iter().map(|constructor| {
+                            let (body_type, body_type_cursor) = namespace
+                                .get_generated::<objects::Type>(objects::ObjectId::from_name(
+                                    "Body".to_owned(),
+                                ))
+                                .expect("couldn't get generated Body type");
+
+                            let (constructor_variant_type, _) = body_type_cursor
+                                .clone()
+                                .get_generated::<objects::Type>(objects::ObjectId(
+                                    ast::NodeId::id_rc(constructor),
+                                    Tag::String("enum_branch"),
+                                ))
+                                .expect("couldn't get generated enum variant for constructor");
+
+                            drop(body_type_cursor);
+
+                            let (_, mut variant_scope_namespace) = namespace
+                                .insert_object_auto_name(objects::Scope::new(
+                                    objects::ObjectId::from_name(constructor.name.clone()),
+                                ));
+
+                            body_type
+                                .to_doc(ctx)
+                                .append("::")
+                                .append(constructor_variant_type.to_doc(ctx))
+                                .append(alloc.space())
+                                .append("{")
+                                .append(alloc.space())
+                                .append(alloc.intersperse(
+                                    constructor.fields.iter().map(|field| {
+                                        variant_scope_namespace
+                                            .insert_object_auto_name(objects::Variable::from_name(
+                                                field.name.clone(),
+                                            ))
+                                            .0
+                                            .to_doc(ctx)
+                                    }),
+                                    alloc.text(",").append(alloc.space()),
+                                ))
+                                .append(alloc.space())
+                                .append("}")
+                                .append(alloc.space())
+                                .append("=>")
+                                .append(alloc.space())
+                                .append("{")
+                                .append(
+                                    alloc
+                                        .hardline()
+                                        .append(
+                                            writer_parameter
+                                                .to_doc(ctx)
+                                                .append(".")
+                                                .append("write_all")
+                                                .append("(")
+                                                .append("&")
+                                                .append("[")
+                                                .append(constructor.generate_enum_descriptor((
+                                                    ctx,
+                                                    variant_scope_namespace.cursor(),
+                                                )))
+                                                .append("]")
+                                                .append(")")
+                                                .append("?")
+                                                .append(";"),
+                                        )
+                                        .append(alloc.hardline())
+                                        .append(constructor.generate_constructor_serialization((
+                                            ctx,
+                                            &mut variant_scope_namespace,
+                                        )))
+                                        .nest(NEST_UNIT),
+                                )
+                                .append("}")
+                                .append(",")
+                                .append(alloc.hardline())
+                        })))
+                        .nest(NEST_UNIT),
+                )
+                .append("}")
+                .append(alloc.hardline())
+                .append("Ok(())")
+                .into_doc()
+        }
+
+        fn generate_serialize_function_body_for_message(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (self_parameter, _) = namespace
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name("self".to_owned()))
+                .expect("couldn't get generated self parameter");
+
+            let constructor = self.constructors[0].clone();
+
+            let (body_type, _) = namespace
+                .get_generated::<objects::Type>(objects::ObjectId::from_name("Body".to_owned()))
+                .expect("couldn't get generated Body type");
+
+            alloc
+                .text("let")
+                .append(alloc.space())
+                .append(body_type.to_doc(ctx))
+                .append("{")
+                .append(alloc.space())
+                .append(alloc.intersperse(
+                    constructor.fields.iter().map(|field| {
+                        namespace
+                            .insert_object_auto_name(objects::Variable::from_name(
+                                field.name.clone(),
+                            ))
+                            .0
+                            .to_doc(ctx)
+                    }),
+                    alloc.text(",").append(alloc.space()),
+                ))
+                .append(alloc.space())
+                .append("}")
+                .append(alloc.space())
+                .append("=")
+                .append(alloc.space())
+                .append(self_parameter.to_doc(ctx))
+                .append(";")
+                .append(alloc.hardline())
+                .append(constructor.generate_constructor_serialization((ctx, namespace)))
+                .into_doc()
+        }
+    }
+
+    impl<'a> Constructor {
+        fn generate_constructor_serialization(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (writer_parameter, _) = namespace
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name(
+                    "writer".to_owned(),
+                ))
+                .expect("couldn't get generated writer parameter");
+
+            alloc
+                .concat(self.fields.iter().map(|field| {
+                    namespace
+                        .get_generated::<objects::Variable>(objects::ObjectId::from_name(
+                            field.name.clone(),
+                        ))
+                        .expect("couldn't get generated constructor field")
+                        .0
+                        .to_doc(ctx)
+                        .append(".")
+                        .append("serialize") // TODO
+                        .append("(")
+                        .append(writer_parameter.to_doc(ctx))
+                        .append(")")
+                        .append("?")
+                        .append(";")
+                        .append(alloc.hardline())
+                }))
+                .into_doc()
+        }
+    }
+
+    impl<'a> Type {
+        fn generate_deserialize_function_declaration(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            // TODO: deserialize function could overlap with other methods, in future need to separate serilialize/deserialize into separate trait
+            let (deserialize_function, mut deserialize_function_namespace) = namespace
+                .insert_object_preserve_name(objects::Function::from_name("deserialize".to_owned()))
+                .expect("couldn't generate deserialize function");
+
+            let (reader_type_parameter, _) = deserialize_function_namespace
+                .insert_object_preserve_name(objects::Type::from_name("R".to_owned()))
+                .expect("couldn't generate W type parameter");
+
+            let (reader_parameter, _) = deserialize_function_namespace
+                .insert_object_preserve_name(objects::Variable::from_name("reader".to_owned()))
+                .expect("couldn't generate reader function parameter");
+
+            let function_body = match self.kind {
+                ast::TypeKind::Message => self.generate_deserialize_function_body_for_message((
+                    ctx,
+                    &mut deserialize_function_namespace,
+                )),
+                ast::TypeKind::Enum => self.generate_deserialize_function_body_for_enum((
+                    ctx,
+                    &mut deserialize_function_namespace,
+                )),
+            };
+
+            alloc
+                .text("pub")
+                .append(alloc.space())
+                .append("fn")
+                .append(alloc.space())
+                .append(deserialize_function.to_doc(ctx))
+                .append("<")
+                .append(reader_type_parameter.to_doc(ctx))
+                .append(":")
+                .append(alloc.space())
+                .append("super")
+                .append("::")
+                .append("Read")
+                .append(">")
+                .append("(")
+                .append(reader_parameter.to_doc(ctx))
+                .append(":")
+                .append(alloc.space())
+                .append("&mut")
+                .append(alloc.space())
+                .append(reader_type_parameter.to_doc(ctx))
+                .append(")")
+                .append(alloc.space())
+                .append("->")
+                .append(alloc.space())
+                .append("Result")
+                .append("<")
+                .append(alloc.intersperse(
+                    [
+                        alloc.text("Self"),
+                        alloc.text("super").append("::").append("DeserializeError"),
+                    ],
+                    alloc.text(",").append(alloc.space()),
+                ))
+                .append(">")
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(function_body)
+                        .nest(NEST_UNIT)
+                        .append(alloc.hardline()),
+                )
+                .append("}")
+                .into_doc()
+        }
+
+        fn generate_deserialize_function_body_for_message(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let constructor = &self.constructors[0];
+            constructor.generate_constructor_deserialization((ctx, namespace), false)
+        }
+
+        fn generate_deserialize_function_body_for_enum(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (reader_parameter, _) = namespace
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name(
+                    "reader".to_owned(),
+                ))
+                .expect("couldn't get generated reader parameter");
+
+            let (descriptor_variable, _) =
+                namespace.insert_object_auto_name(objects::Variable::from_object(
+                    objects::ObjectId(
+                        ast::NodeId::owned("descriptor".to_owned()),
+                        objects::Tag::String("variable"),
+                    ),
+                    "descriptor".to_owned(),
+                ));
+
+            alloc
+                .text("let")
+                .append(alloc.space())
+                .append("mut")
+                .append(alloc.space())
+                .append(descriptor_variable.to_doc(ctx))
+                .append(alloc.space())
+                .append("=")
+                .append(alloc.space())
+                .append("0")
+                .append(";")
+                .append(alloc.hardline())
+                .append(reader_parameter.clone().to_doc(ctx))
+                .append(".")
+                .append("read")
+                .append("(")
+                .append("super::slice::from_mut(")
+                .append("&mut")
+                .append(alloc.space())
+                .append(descriptor_variable.to_doc(ctx))
+                .append(")")
+                .append(")")
+                .append(".")
+                .append("map_err")
+                .append("(|e| super::DeserializeError::IoError(e))")
+                .append("?")
+                .append(";")
+                .append(alloc.hardline())
+                .append("match")
+                .append(alloc.space())
+                .append(descriptor_variable.to_doc(ctx))
+                .append(alloc.space())
+                .append("{")
+                .append(
+                    alloc
+                        .hardline()
+                        .append(
+                            alloc.concat(
+                                self.constructors
+                                    .iter()
+                                    .map(|constructor| {
+                                        let (_, mut variant_scope_namespace) = namespace
+                                            .insert_object_auto_name(objects::Scope::new(
+                                                objects::ObjectId::from_name(
+                                                    constructor.name.clone(),
+                                                ),
+                                            ));
+
+                                        constructor
+                                            .generate_enum_descriptor((
+                                                ctx,
+                                                variant_scope_namespace.cursor(),
+                                            ))
+                                            .expect("couldn't generate enum descriptor")
+                                            .append(alloc.space())
+                                            .append("=>")
+                                            .append(alloc.space())
+                                            .append("{")
+                                            .append(
+                                                alloc
+                                                    .hardline()
+                                                    .append(
+                                                        constructor
+                                                            .generate_constructor_deserialization(
+                                                                (ctx, &mut variant_scope_namespace),
+                                                                true,
+                                                            ),
+                                                    )
+                                                    .nest(NEST_UNIT),
+                                            )
+                                            .append("}")
+                                    })
+                                    .chain(iter::once(
+                                        alloc
+                                            .text("_")
+                                            .append(alloc.space())
+                                            .append("=>")
+                                            .append(alloc.space())
+                                            .append(
+                                                "Err(super::DeserializeError::UnknownDescriptor)",
+                                            )
+                                            .into_doc(),
+                                    ))
+                                    .map(|variant| variant.append(",").append(alloc.hardline())),
+                            ),
+                        )
+                        .nest(NEST_UNIT),
+                )
+                .append("}")
+                .into_doc()
+        }
+    }
+
+    impl<'a> Constructor {
+        fn generate_constructor_deserialization(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+            is_enum_constructor: bool,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let implicits = if is_enum_constructor {
+                self.implicits
+                    .iter()
+                    .map(|implicit| {
+                        namespace
+                            .get_generated::<objects::Variable>(objects::ObjectId(
+                                ast::NodeId::id_rc(implicit),
+                                objects::Tag::None,
+                            ))
+                            .expect("couldn't get generated implicit")
+                            .0
+                            .to_doc(ctx)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                let (dependencies_param, _) = namespace
+                    .get_generated::<objects::Variable>(ObjectId::from_name(
+                        "dependencies".to_owned(),
+                    ))
+                    .expect("couldn't get generated dependencies parameter");
+
+                let (_, dependencies_type_cursor) = namespace
+                    .get_generated::<objects::Type>(ObjectId::from_name("Dependencies".to_owned()))
+                    .expect("couldn't get generated Dependencies type");
+
+                let (_, implicits_extractor_if_scope) =
+                    namespace.insert_object_auto_name(objects::Scope::new(
+                        objects::ObjectId::from_name("implicits_extractor".to_owned()),
+                    ));
+
+                // alloc
+                //     .text("if")
+                //     .append(alloc.space())
+                //     .append("let")
+                //     .append(alloc.space())
+                //     .append()
+
+                todo!()
+            };
+
+            if is_enum_constructor {
+                todo!()
+            } else {
+                self.generate_constructor_call((ctx, namespace), implicits)
+            }
+        }
+
+        fn generate_constructor_call(
+            &self,
+            (ctx, namespace): MutContext<'a, '_, '_>,
+            implicits: Vec<BoxDoc<'a>>,
+        ) -> BoxDoc<'a> {
+            let alloc = ctx.alloc;
+
+            let (reader_parameter, _) = namespace
+                .get_generated::<objects::Variable>(objects::ObjectId::from_name(
+                    "reader".to_owned(),
+                ))
+                .expect("couldn't get generated reader parameter");
+
+            alloc
+                .concat(self.fields.iter().map(|field| {
+                    alloc
+                        .text("let")
+                        .append(alloc.space())
+                        .append(
+                            namespace
+                                .insert_object_auto_name(objects::Variable::from_object(
+                                    objects::ObjectId(
+                                        ast::NodeId::id_rc(field),
+                                        objects::Tag::None,
+                                    ),
+                                    field.name.clone(),
+                                ))
+                                .0
+                                .to_doc(ctx),
+                        )
+                        .append(alloc.space())
+                        .append("=")
+                        .append(alloc.space())
+                        .append("Self")
+                        .append("::")
+                        .append("deserialize") // TODO
+                        .append("(")
+                        .append(reader_parameter.to_doc(ctx))
+                        .append(")")
+                        .append("?")
+                        .append(";")
+                        .append(alloc.hardline())
+                }))
+                .append(
+                    self.generate_constructor_construction(
+                        (ctx, namespace.cursor()),
+                        implicits
+                            .into_iter()
+                            .chain(self.fields.iter().map(|field| {
+                                alloc
+                                    .text("Box")
+                                    .append("::")
+                                    .append("new")
+                                    .append("(")
+                                    .append(
+                                        namespace
+                                            .get_generated::<objects::Variable>(objects::ObjectId(
+                                                ast::NodeId::id_rc(field),
+                                                objects::Tag::None,
+                                            ))
+                                            .expect("couldn't get generated field variable")
+                                            .0
+                                            .to_doc(ctx),
+                                    )
+                                    .append(")")
+                                    .into_doc()
+                            }))
+                            .collect(),
+                    ),
+                )
+                .into_doc()
+                .append(".")
+                .append("map_err")
+                .append("(|e| super::DeserializeError::ConstructorError(e))")
+                .append(alloc.hardline())
         }
     }
 }
@@ -1245,7 +2028,7 @@ mod value_from_expression {
                 });
 
             type_module_cursor
-                .lookup_generated::<objects::Type>(ObjectId(
+                .lookup_generated::<objects::Scope>(ObjectId(
                     NodeId::id_rc(&ty),
                     Tag::String("inherent_impl"),
                 ))
@@ -1292,73 +2075,33 @@ mod value_from_expression {
 }
 
 impl<'a> Constructor {
-    pub fn generate_body_construction<'cursor>(
+    pub fn generate_constructor_construction<'cursor>(
         &self,
         (ctx, namespace): Context<
             'a,
             'cursor,
             impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
         >,
-        fields: Vec<BoxDoc<'a>>,
+        values: Vec<BoxDoc<'a>>,
     ) -> BoxDoc<'a> {
-        assert!(
-            self.fields.len() == fields.len(),
-            "unexpected amount of fields passed in"
-        );
-
         let alloc = ctx.alloc;
 
-        let (body_type, body_namespace) = namespace
-            .get_generated::<objects::Type>(ObjectId::from_name("Body".to_owned()))
-            .expect("couldn't get Body struct");
-
-        let (constructor, constructor_namespace) = match self.result_type.get_type().kind {
-            ast::TypeKind::Message => (body_type.to_doc(ctx), body_namespace),
-            ast::TypeKind::Enum => {
-                let (enum_branch, enum_branch_namespace) = body_namespace
-                    .get_generated::<objects::Type>(ObjectId(
-                        NodeId::id(self),
-                        Tag::String("enum_branch"),
-                    ))
-                    .expect("couldn't get enum branch");
-                (
-                    body_type
-                        .to_doc(ctx)
-                        .append("::")
-                        .append(enum_branch.to_doc(ctx)),
-                    enum_branch_namespace,
-                )
-            }
-        };
-
+        // TODO: rewrite from just using "Self" to checking that we are in fact inside impl of Self and using it only then.
         alloc
-            .text("Ok(")
-            .append(constructor)
-            .append(alloc.space())
-            .append("{")
+            .text("Self")
+            .append("::")
             .append(
-                alloc
-                    .hardline()
-                    .append(alloc.intersperse(
-                        self.fields.iter().zip(fields).map(|(field, value)| {
-                            constructor_namespace
-                                .clone()
-                                .get_generated::<objects::Variable>(ObjectId(
-                                    NodeId::id_rc(field),
-                                    Tag::None,
-                                ))
-                                .expect("couldn't find body constructor field")
-                                .0
-                                .to_doc(ctx)
-                                .append(": ")
-                                .append(value)
-                        }),
-                        alloc.text(",").append(alloc.hardline()),
+                namespace
+                    .get_generated::<objects::Function>(objects::ObjectId(
+                        NodeId::id(self),
+                        Tag::None,
                     ))
-                    .nest(NEST_UNIT)
-                    .append(alloc.hardline()),
+                    .expect("couldn't get generated constructor constructor")
+                    .0
+                    .to_doc(ctx),
             )
-            .append("}")
+            .append("(")
+            .append(alloc.intersperse(values, alloc.text(",").append(alloc.space())))
             .append(")")
             .into_doc()
     }
@@ -1371,7 +2114,7 @@ impl<'a> Symbol {
     ) -> BoxDoc<'a> {
         let ty = ctx
             .alloc
-            .text("deps::Box<")
+            .text("super::Box<")
             .append({
                 let ty = self.ty.get_type();
                 let (type_module_prefix, type_module) = ty
@@ -1451,6 +2194,115 @@ impl<'a> Type {
                     );
                 });
             Some((path.unwrap().append("::"), cursor))
+        }
+    }
+}
+
+impl<'a> ValueExpression {
+    pub fn generate_as_pattern(&self, (ctx, namespace): MutContext<'a, '_, '_>) -> BoxDoc<'a> {
+        let alloc = ctx.alloc;
+
+        match self {
+            ValueExpression::OpCall(op_call) => {
+                panic!("OpCall's are currently not supported in patterns")
+            }
+            ValueExpression::Constructor {
+                call,
+                implicits: _,
+                arguments,
+            } => {
+                let call = call.upgrade().expect("call to unknown constructor");
+                let ty = match &call.result_type {
+                    TypeExpression::Type { call, dependencies } => {
+                        call.upgrade().expect("call to unknown type constructor")
+                    }
+                };
+
+                let (type_module_prefix, type_module_cursor) = ty
+                    .lookup_type_module((ctx, namespace.cursor()))
+                    .expect("coudln't lookup type module");
+
+                let (body_type, body_type_cursor) = type_module_cursor
+                    .get_generated::<objects::Type>(ObjectId::from_name("Body".to_owned()))
+                    .expect("coudln't get generated Body type");
+
+                let (constructor_enum_branch, constructor_enum_branch_cursor) = body_type_cursor
+                    .get_generated::<objects::Type>(ObjectId(
+                        ast::NodeId::id_rc(&call),
+                        objects::Tag::String("enum_branch"),
+                    ))
+                    .expect("couldn't get constructor enum branch");
+
+                // TODO: Do something with the following
+
+                // Problem with current approach is following:
+                // enum T (n Nat) {
+                //     Zero => ...
+                //     Suc ( p ) => ...
+                //     Suc ( Suc ( p ) ) => ...
+                // }
+                // To third constructor be expressible (to something like `if let Suc { pred: Suc { pred } } = ...` be compiled)
+                // in current api at least one of the following statements must be true:
+                // 1. box, deref etc pattern becomes stable
+                // 2. constructor fields are stored by reference
+
+                // I see 2 approaces:
+                // Either extract needed implicits from dependencies by hand without any matching.
+                // Or implement reference type for the messages, so 2. option could be available.
+                // Both requires non small amount of code.
+
+                let fields = call
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        constructor_enum_branch_cursor
+                            .clone()
+                            .get_generated::<objects::Variable>(objects::ObjectId(
+                                ast::NodeId::id_rc(field),
+                                objects::Tag::None,
+                            ))
+                            .expect("couldn't get constructor field")
+                            .0
+                            .to_doc(ctx)
+                    })
+                    .collect::<Vec<_>>();
+
+                drop(constructor_enum_branch_cursor);
+
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| argument.generate_as_pattern((ctx, namespace)))
+                    .collect::<Vec<_>>();
+
+                type_module_prefix
+                    .append(body_type.to_doc(ctx))
+                    .append("::")
+                    .append(constructor_enum_branch.to_doc(ctx))
+                    .append(alloc.space())
+                    .append("{")
+                    .append(alloc.space())
+                    .append(
+                        alloc.intersperse(
+                            fields.into_iter().zip(arguments.into_iter()).map(
+                                |(field, argument)| {
+                                    field.append(":").append(alloc.space()).append(argument)
+                                },
+                            ),
+                            alloc.text(",").append(alloc.space()),
+                        ),
+                    )
+                    .append(alloc.space())
+                    .append("}")
+            }
+            ValueExpression::Variable(symbol) => {
+                let symbol = symbol.upgrade().expect("use of unknown variable");
+                let (variable, _) =
+                    namespace.insert_object_auto_name(objects::Variable::from_object(
+                        objects::ObjectId(ast::NodeId::id_rc(&symbol), objects::Tag::None),
+                        symbol.name.clone(),
+                    ));
+                variable.to_doc(ctx)
+            }
         }
     }
 }
