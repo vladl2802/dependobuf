@@ -2,12 +2,9 @@ use dbuf_rust_runtime::{Box, ConstructorError, DeserializeError};
 use std::io::{Write, Read, Error};
 use std::slice;
 pub mod nat {
-    use super::serde::{self, Serialize, Deserialize};
-    
     mod deps {
         // pub(super) use super::super::{};
     }
-    
     mod descriptor {
         pub(super) const Suc: u8 = 0;
         pub(super) const Zero: u8 = 1;
@@ -22,21 +19,18 @@ pub mod nat {
         }
     }
     
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(crate = "self::serde")]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Dependencies {
     
     }
     
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(crate = "self::serde")]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Nat {
         pub body: Body,
         pub dependencies: Dependencies
     }
-    
     impl Nat {
-        pub fn Suc(pred: super::Box<Nat>) -> Result<Self, super::ConstructorError> {
+        pub fn suc(pred: super::Box<Nat>) -> Result<Self, super::ConstructorError> {
             let body = if (()) == (()) {
                 Ok(Body::Suc {
                     pred: pred
@@ -49,7 +43,7 @@ pub mod nat {
             };
             Ok(Self { body: body, dependencies: dependencies })
         }
-        pub fn Zero() -> Result<Self, super::ConstructorError> {
+        pub fn zero() -> Result<Self, super::ConstructorError> {
             let body = if () == () {
                 Ok(Body::Zero {
                 
@@ -83,13 +77,13 @@ pub mod nat {
                         let pred = Self::deserialize(Dependencies {
                         
                         }, reader)?;
-                        Self::Suc(Box::new(pred)).map_err(|e| super::DeserializeError::ConstructorError(e))
+                        Self::suc(Box::new(pred)).map_err(|e| super::DeserializeError::ConstructorError(e))
                     } else {
                         Err(super::DeserializeError::DependenciesDescriptorMismatch)
                     }},
                 descriptor::Zero => {
                     if let () = () {
-                        Self::Zero().map_err(|e| super::DeserializeError::ConstructorError(e))
+                        Self::zero().map_err(|e| super::DeserializeError::ConstructorError(e))
                     } else {
                         Err(super::DeserializeError::DependenciesDescriptorMismatch)
                     }},

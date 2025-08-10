@@ -468,9 +468,7 @@ mod type_declaration {
                 .expect("couldn't get Dependencies type");
 
             let message_struct = alloc
-                .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
-                .append(alloc.hardline())
-                .append("#[serde(crate = \"self::serde\")]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
                 .append(alloc.hardline())
                 .append("pub struct")
                 .append(alloc.space())
@@ -588,9 +586,7 @@ mod type_declaration {
                 ast::TypeKind::Enum => "enum",
             };
             alloc
-                .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
-                .append(alloc.hardline())
-                .append("#[serde(crate = \"self::serde\")]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
                 .append(alloc.hardline())
                 .append(format!("pub {holder}"))
                 .append(alloc.space())
@@ -615,9 +611,7 @@ mod type_declaration {
                 .insert_object_auto_name(objects::Type::from_name("Dependencies".to_owned()));
 
             alloc
-                .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
-                .append(alloc.hardline())
-                .append("#[serde(crate = \"self::serde\")]")
+                .text("#[derive(Clone, Debug, PartialEq, Eq)]")
                 .append(alloc.hardline())
                 .append("pub")
                 .append(alloc.space())
@@ -690,16 +684,14 @@ impl<'a> Type {
                                     Tag::None,
                                 ))
                                 .expect("couldn't get Dependencies field");
-                                    field
-                                        .to_doc(ctx)
-                                        .append(":")
-                                        .append(alloc.space())
-                                        .append(value)
-                                },
-                            ),
-                            alloc.text(",").append(alloc.hardline()),
-                        ),
-                    )
+                            field
+                                .to_doc(ctx)
+                                .append(":")
+                                .append(alloc.space())
+                                .append(value)
+                        }),
+                        alloc.text(",").append(alloc.hardline()),
+                    ))
                     .nest(NEST_UNIT)
                     .append(alloc.hardline()),
             )
