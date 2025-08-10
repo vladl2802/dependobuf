@@ -79,12 +79,20 @@ pub mod nat {
             reader.read(super::slice::from_mut(&mut descriptor)).map_err(|e| super::DeserializeError::IoError(e))?;
             match descriptor {
                 descriptor::Suc => {
-                    let pred = Self::deserialize(dependencies, reader)?;
-                    Self::Suc(Box::new(pred)).map_err(|e| super::DeserializeError::ConstructorError(e))
-                },
+                    if let () = () {
+                        let pred = Self::deserialize(Dependencies {
+                        
+                        }, reader)?;
+                        Self::Suc(Box::new(pred)).map_err(|e| super::DeserializeError::ConstructorError(e))
+                    } else {
+                        Err(super::DeserializeError::DependenciesDescriptorMismatch)
+                    }},
                 descriptor::Zero => {
-                    Self::Zero().map_err(|e| super::DeserializeError::ConstructorError(e))
-                },
+                    if let () = () {
+                        Self::Zero().map_err(|e| super::DeserializeError::ConstructorError(e))
+                    } else {
+                        Err(super::DeserializeError::DependenciesDescriptorMismatch)
+                    }},
                 _ => Err(super::DeserializeError::UnknownDescriptor),
             }
         }

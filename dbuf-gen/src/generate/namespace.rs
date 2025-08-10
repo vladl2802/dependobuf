@@ -19,7 +19,7 @@ pub struct NamespaceTree<'parent, Key, Value> {
     edge: Option<Edge<'parent, Key, Value>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum TreeCursorImpl<'me, Key, Value> {
     InTree {
         object: &'me Node<Key, Value>,
@@ -31,7 +31,7 @@ enum TreeCursorImpl<'me, Key, Value> {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct NamespaceCursor<'me, Key, Value>(TreeCursorImpl<'me, Key, Value>);
 
 #[allow(dead_code, reason = "??? (some methods are never used)")]

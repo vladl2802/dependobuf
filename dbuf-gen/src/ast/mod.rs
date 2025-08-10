@@ -94,4 +94,13 @@ impl TypeExpression {
             } => call.upgrade().expect("call to unknown type"),
         }
     }
+
+    pub fn get_dependencies(&self) -> &Vec<ValueExpression> {
+        match self {
+            TypeExpression::Type {
+                call: _,
+                dependencies,
+            } => dependencies,
+        }
+    }
 }

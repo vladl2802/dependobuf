@@ -74,17 +74,25 @@ pub mod nat {
             }
             Ok(())
         }
-        pub fn deserialize<R: super::Read>(reader: &mut R) -> Result<Self, super::DeserializeError> {
+        pub fn deserialize<R: super::Read>(dependencies: Dependencies, reader: &mut R) -> Result<Self, super::DeserializeError> {
             let mut descriptor = 0;
             reader.read(super::slice::from_mut(&mut descriptor)).map_err(|e| super::DeserializeError::IoError(e))?;
             match descriptor {
                 descriptor::Suc => {
-                    let pred = Self::deserialize(reader)?;
-                    Self::Suc(super::Box::new(pred)).map_err(|e| super::DeserializeError::ConstructorError(e))
-                },
+                    if let () = () {
+                        let pred = Self::deserialize(Dependencies {
+                        
+                        }, reader)?;
+                        Self::Suc(Box::new(pred)).map_err(|e| super::DeserializeError::ConstructorError(e))
+                    } else {
+                        Err(super::DeserializeError::DependenciesDescriptorMismatch)
+                    }},
                 descriptor::Zero => {
-                    Self::Zero().map_err(|e| super::DeserializeError::ConstructorError(e))
-                },
+                    if let () = () {
+                        Self::Zero().map_err(|e| super::DeserializeError::ConstructorError(e))
+                    } else {
+                        Err(super::DeserializeError::DependenciesDescriptorMismatch)
+                    }},
                 _ => Err(super::DeserializeError::UnknownDescriptor),
             }
         }
@@ -176,21 +184,23 @@ pub mod vec {
             reader.read(super::slice::from_mut(&mut descriptor)).map_err(|e| super::DeserializeError::IoError(e))?;
             match descriptor {
                 descriptor::Cons => {
-                    if let ( deps::nat::Body::Suc { pred } ) = ( dependencies.n.body ) {
-                        let val = deps::Nat::deserialize(reader)?;
-                        let tail = Self::deserialize(Dependencies { n: pred.clone() }, reader)?;
-                        Self::Cons(pred, super::Box::new(val), super::Box::new(tail)).map_err(|e| super::DeserializeError::ConstructorError(e))
+                    if let (deps::nat::Body::Suc { pred: p }) = (dependencies.n.body) {
+                        let val = deps::Nat::deserialize(deps::nat::Dependencies {
+                        
+                        }, reader)?;
+                        let tail = Self::deserialize(Dependencies {
+                            n: p.clone()
+                        }, reader)?;
+                        Self::Cons(p.clone(), Box::new(val), Box::new(tail)).map_err(|e| super::DeserializeError::ConstructorError(e))
                     } else {
                         Err(super::DeserializeError::DependenciesDescriptorMismatch)
-                    }
-                },
+                    }},
                 descriptor::Nil => {
-                    if let deps::nat::Body::Zero {} = dependencies.n.body {
+                    if let (deps::nat::Body::Zero {  }) = (dependencies.n.body) {
                         Self::Nil().map_err(|e| super::DeserializeError::ConstructorError(e))
                     } else {
                         Err(super::DeserializeError::DependenciesDescriptorMismatch)
-                    }
-                },
+                    }},
                 _ => Err(super::DeserializeError::UnknownDescriptor),
             }
         }
