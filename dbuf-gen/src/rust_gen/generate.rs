@@ -52,7 +52,7 @@ impl<'a> Type {
         if let Some(descriptor_module) =
             self.generate_enum_descriptor_module((ctx, &mut type_namespace))
         {
-            module_parts.push(descriptor_module)
+            module_parts.push(descriptor_module);
         }
         module_parts.push(self.generate_declaration((ctx, &mut type_namespace)));
         module_parts.push(self.generate_inherent_impl((ctx, &mut type_namespace)));
@@ -705,7 +705,13 @@ mod type_inherent_impl {
         rc::{Rc, Weak},
     };
 
+    use crate::rust_gen::generate::value_from_expression::Locator;
+
     use super::super::prelude::*;
+
+    struct ConstructorObjectsLocator {}
+
+    impl<'a> super::value_from_expression::Locator<'a> for ConstructorObjectsLocator {}
 
     impl<'a> Type {
         pub(super) fn generate_inherent_impl(
@@ -877,7 +883,7 @@ mod type_inherent_impl {
                         .append("(")
                         .append(expr.generate_as_value(
                             (ctx, namespace.cursor()),
-                            &ValueExpression::dafault_variable_locator((ctx, namespace.cursor())),
+                            &ConstructorObjectsLocator {},
                         ))
                         .append(")")
                         .into_doc()
@@ -945,10 +951,7 @@ mod type_inherent_impl {
                                     dependencies.iter().map(|expr| {
                                         alloc.text("&").append(expr.generate_as_value(
                                             (ctx, namespace.cursor()),
-                                            &ValueExpression::dafault_variable_locator((
-                                                ctx,
-                                                namespace.cursor(),
-                                            )),
+                                            &ConstructorObjectsLocator {},
                                         ))
                                     }),
                                     alloc.text(",").append(alloc.line()),
@@ -1077,27 +1080,22 @@ mod type_inherent_impl {
                 .append(
                     alloc
                         .hardline()
-                        .append(
-                            alloc.intersperse(
-                                self.fields
-                                    .iter()
-                                    .zip(fields.into_iter())
-                                    .map(|(field, value)| {
-                                        constructor_namespace
-                                            .clone()
-                                            .get_generated::<objects::Variable>(ObjectId(
-                                                NodeId::id_rc(field),
-                                                Tag::None,
-                                            ))
-                                            .expect("couldn't find body constructor field")
-                                            .0
-                                            .to_doc(ctx)
-                                            .append(": ")
-                                            .append(value)
-                                    }),
-                                alloc.text(",").append(alloc.hardline()),
-                            ),
-                        )
+                        .append(alloc.intersperse(
+                            self.fields.iter().zip(fields).map(|(field, value)| {
+                                constructor_namespace
+                                    .clone()
+                                    .get_generated::<objects::Variable>(ObjectId(
+                                        NodeId::id_rc(field),
+                                        Tag::None,
+                                    ))
+                                    .expect("couldn't find body constructor field")
+                                    .0
+                                    .to_doc(ctx)
+                                    .append(": ")
+                                    .append(value)
+                            }),
+                            alloc.text(",").append(alloc.hardline()),
+                        ))
                         .nest(NEST_UNIT)
                         .append(alloc.hardline()),
                 )
@@ -1196,6 +1194,7 @@ mod type_inherent_impl {
                 .into_doc()
         }
 
+        #[allow(clippy::too_many_lines, reason = "??? (104/100)")]
         fn generate_serialize_function_body_for_enum(
             &self,
             (ctx, namespace): MutContext<'a, '_, '_>,
@@ -1397,6 +1396,71 @@ mod type_inherent_impl {
         }
     }
 
+    struct EnumConstructorDeserializationObjectsLocator {}
+
+    impl<'a> super::value_from_expression::Locator<'a>
+        for EnumConstructorDeserializationObjectsLocator
+    {
+        fn locate_variable<'cursor>(
+            &self,
+            (ctx, namespace): Context<
+                'a,
+                'cursor,
+                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            >,
+            symbol: &Weak<Symbol>,
+        ) -> BoxDoc<'a> {
+            namespace
+                .get_generated::<objects::Variable>(ObjectId(NodeId::id_weak(symbol), Tag::None))
+                .expect("couldn't get variable")
+                .0
+                .to_doc(ctx)
+                .append(".")
+                .append("clone")
+                .append("()")
+        }
+    }
+
+    struct MessageConstructorDeserializationObjectsLocator {}
+
+    impl<'a> super::value_from_expression::Locator<'a>
+        for MessageConstructorDeserializationObjectsLocator
+    {
+        fn locate_variable<'cursor>(
+            &self,
+            (ctx, namespace): Context<
+                'a,
+                'cursor,
+                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            >,
+            symbol: &Weak<Symbol>,
+        ) -> BoxDoc<'a> {
+            let (dependencies_param, _) = namespace
+                .clone()
+                .get_generated::<objects::Variable>(ObjectId::from_name("dependencies".to_owned()))
+                .expect("couldn't get generated dependencies parameter");
+
+            let (_, dependencies_type_cursor) = namespace
+                .clone()
+                .get_generated::<objects::Type>(ObjectId::from_name("Dependencies".to_owned()))
+                .expect("couldn't get generated Dependencies type");
+
+            dependencies_param.to_doc(ctx).append(".").append(
+                dependencies_type_cursor
+                    .get_generated::<objects::Variable>(objects::ObjectId(
+                        ast::NodeId::id_weak(symbol),
+                        objects::Tag::None,
+                    ))
+                    .expect("couldn't get generated implicit")
+                    .0
+                    .to_doc(ctx)
+                    .append(".")
+                    .append("clone")
+                    .append("()"),
+            )
+        }
+    }
+
     impl<'a> Type {
         fn generate_deserialize_function_declaration(
             &self,
@@ -1511,6 +1575,7 @@ mod type_inherent_impl {
             constructor.generate_constructor_deserialization((ctx, namespace), false)
         }
 
+        #[allow(clippy::too_many_lines, reason = "??? (103/100)")]
         fn generate_deserialize_function_body_for_enum(
             &self,
             (ctx, namespace): MutContext<'a, '_, '_>,
@@ -1744,12 +1809,35 @@ mod type_inherent_impl {
                 ))
                 .expect("couldn't get generated reader parameter");
 
+            // This is dirty, because I can't type erase Locator as its methods take as argument Context<..., impl Cursor>
+            // So cleaning this up requires type erased Cursor
+            // TODO: cleanup when proper Cursor will be implemented
+
             let fields_deserialization = alloc.concat(self.fields.iter().map(|field| {
                 let field_ty = field.ty.get_type();
 
                 let (field_type_module_prefix, field_type_module_cursor) = field_ty
                     .lookup_type_module((ctx, namespace.cursor()))
                     .expect("couldn't lookup type module");
+
+                // let namespace_cursor = namespace.cursor();
+
+                let generate_value_expression: Box<dyn Fn(&ValueExpression) -> BoxDoc<'a>> =
+                    if is_enum_constructor {
+                        Box::new(|value: &ValueExpression| {
+                            value.generate_as_value(
+                                (ctx, namespace.cursor()),
+                                &EnumConstructorDeserializationObjectsLocator {},
+                            )
+                        })
+                    } else {
+                        Box::new(|value: &ValueExpression| {
+                            value.generate_as_value(
+                                (ctx, namespace.cursor()),
+                                &MessageConstructorDeserializationObjectsLocator {},
+                            )
+                        })
+                    };
 
                 let dependencies_struct = field_type_module_prefix.append(
                     field_ty.generate_type_dependencies_struct(
@@ -1758,18 +1846,12 @@ mod type_inherent_impl {
                             .ty
                             .get_dependencies()
                             .iter()
-                            .map(|value| {
-                                value.generate_as_value(
-                                    (ctx, namespace.cursor()),
-                                    &Self::locate_implicit(
-                                        (ctx, namespace.cursor()),
-                                        is_enum_constructor,
-                                    ),
-                                )
-                            })
+                            .map(&generate_value_expression)
                             .collect(),
                     ),
                 );
+
+                drop(generate_value_expression);
 
                 let (field_type_type_prefix, _) = field_ty
                     .lookup_type_type((ctx, namespace.cursor()))
@@ -1808,11 +1890,18 @@ mod type_inherent_impl {
                 self.implicits
                     .iter()
                     .map(|implicit| {
-                        Self::locate_implicit((ctx, namespace.cursor()), is_enum_constructor)(
-                            &Rc::downgrade(implicit),
-                        )
+                        if is_enum_constructor {
+                            EnumConstructorDeserializationObjectsLocator {}.locate_variable(
+                                (ctx, namespace.cursor()),
+                                &Rc::downgrade(implicit),
+                            )
+                        } else {
+                            MessageConstructorDeserializationObjectsLocator {}.locate_variable(
+                                (ctx, namespace.cursor()),
+                                &Rc::downgrade(implicit),
+                            )
+                        }
                     })
-                    .into_iter()
                     .chain(self.fields.iter().map(|field| {
                         alloc
                             .text("Box")
@@ -1843,62 +1932,6 @@ mod type_inherent_impl {
                 .append(alloc.hardline())
                 .into_doc()
         }
-
-        fn locate_implicit<'cursor>(
-            (ctx, namespace): Context<
-                'a,
-                'cursor,
-                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>> + 'cursor,
-            >,
-            is_enum_constructor: bool,
-        ) -> Box<dyn Fn(&Weak<Symbol>) -> BoxDoc<'a> + 'cursor> {
-            if is_enum_constructor {
-                Box::new(move |implicit: &Weak<Symbol>| {
-                    namespace
-                        .clone()
-                        .get_generated::<objects::Variable>(objects::ObjectId(
-                            ast::NodeId::id_weak(implicit),
-                            objects::Tag::None,
-                        ))
-                        .expect("couldn't get generated implicit")
-                        .0
-                        .to_doc(ctx)
-                        .append(".")
-                        .append("clone")
-                        .append("()")
-                })
-            } else {
-                Box::new(move |implicit: &Weak<Symbol>| {
-                    let (dependencies_param, _) = namespace
-                        .clone()
-                        .get_generated::<objects::Variable>(ObjectId::from_name(
-                            "dependencies".to_owned(),
-                        ))
-                        .expect("couldn't get generated dependencies parameter");
-
-                    let (_, dependencies_type_cursor) = namespace
-                        .clone()
-                        .get_generated::<objects::Type>(ObjectId::from_name(
-                            "Dependencies".to_owned(),
-                        ))
-                        .expect("couldn't get generated Dependencies type");
-
-                    dependencies_param.to_doc(ctx).append(".").append(
-                        dependencies_type_cursor
-                            .get_generated::<objects::Variable>(objects::ObjectId(
-                                ast::NodeId::id_weak(implicit),
-                                objects::Tag::None,
-                            ))
-                            .expect("couldn't get generated implicit")
-                            .0
-                            .to_doc(ctx)
-                            .append(".")
-                            .append("clone")
-                            .append("()"),
-                    )
-                })
-            }
-        }
     }
 }
 
@@ -1907,36 +1940,92 @@ mod value_from_expression {
 
     use super::super::prelude::*;
 
-    impl<'a> ValueExpression {
-        pub(super) fn dafault_variable_locator<'cursor>(
-            (ctx, namespace): Context<
-                'a,
-                'cursor,
-                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>> + 'cursor,
-            >,
-        ) -> Box<dyn Fn(&Weak<Symbol>) -> BoxDoc<'a> + 'cursor> {
-            Box::new(move |weak: &Weak<Symbol>| {
-                namespace
-                    .clone()
-                    .get_generated::<objects::Variable>(ObjectId(NodeId::id_weak(weak), Tag::None))
-                    .expect("couldn't get variable")
-                    .0
-                    .to_doc(ctx)
-            })
-        }
-
-        pub(super) fn generate_as_value<'cursor>(
+    pub trait Locator<'a> {
+        fn locate_variable<'cursor>(
             &self,
             (ctx, namespace): Context<
                 'a,
                 'cursor,
                 impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
             >,
-            locate_variable: &dyn Fn(&Weak<Symbol>) -> BoxDoc<'a>,
+            symbol: &Weak<Symbol>,
+        ) -> BoxDoc<'a> {
+            namespace
+                .get_generated::<objects::Variable>(ObjectId(NodeId::id_weak(symbol), Tag::None))
+                .expect("couldn't get variable")
+                .0
+                .to_doc(ctx)
+        }
+
+        fn locate_constructor<'cursor>(
+            &self,
+            (ctx, namespace): Context<
+                'a,
+                'cursor,
+                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            >,
+            constructor: &Constructor,
+        ) -> BoxDoc<'a> {
+            let ty = constructor.result_type.get_type();
+
+            let (type_module_prefix, type_module_cursor) = ty
+                .lookup_type_module((ctx, namespace.clone()))
+                .expect("couldn't lookup type module");
+
+            let mut constructor_func = Some(type_module_prefix);
+
+            type_module_cursor
+                .clone()
+                .lookup_generated::<objects::Type>(ObjectId(
+                    NodeId::id_rc(&ty),
+                    Tag::String("type"),
+                ))
+                .expect("couldn't lookup message type")
+                .apply(|_, generated| {
+                    constructor_func = Some(
+                        constructor_func.take().unwrap().append(
+                            objects::GeneratedType::try_from(generated)
+                                .expect("expected type")
+                                .to_doc(ctx),
+                        ),
+                    );
+                });
+
+            type_module_cursor
+                .lookup_generated::<objects::Scope>(ObjectId(
+                    NodeId::id_rc(&ty),
+                    Tag::String("inherent_impl"),
+                ))
+                .expect("couldn't lookup inherent impl")
+                .lookup_generated::<objects::Function>(ObjectId(NodeId::id(constructor), Tag::None))
+                .expect("couldn't lookup type constructor")
+                .apply(|_, generated| {
+                    constructor_func = Some(
+                        constructor_func.take().unwrap().append("::").append(
+                            objects::GeneratedFunction::try_from(generated)
+                                .expect("expected function")
+                                .to_doc(ctx),
+                        ),
+                    );
+                });
+
+            constructor_func.unwrap()
+        }
+    }
+
+    impl<'a> ValueExpression {
+        pub(super) fn generate_as_value<'cursor, L: Locator<'a>>(
+            &self,
+            (ctx, namespace): Context<
+                'a,
+                'cursor,
+                impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            >,
+            locator: &L,
         ) -> BoxDoc<'a> {
             match self {
                 ValueExpression::OpCall(op_call) => {
-                    generate_op_as_value(op_call, (ctx, namespace), locate_variable)
+                    generate_op_as_value(op_call, (ctx, namespace), locator)
                 }
                 ValueExpression::Constructor {
                     call,
@@ -1945,25 +2034,20 @@ mod value_from_expression {
                 } => call
                     .upgrade()
                     .expect("call to unknown constructor")
-                    .generate_call_as_value(
-                        (ctx, namespace),
-                        locate_variable,
-                        implicits,
-                        arguments,
-                    ),
-                ValueExpression::Variable(weak) => locate_variable(weak),
+                    .generate_call_as_value((ctx, namespace), locator, implicits, arguments),
+                ValueExpression::Variable(weak) => locator.locate_variable((ctx, namespace), weak),
             }
         }
     }
 
-    fn generate_op_as_value<'a, 'cursor>(
+    fn generate_op_as_value<'a, 'cursor, L: Locator<'a>>(
         op_call: &OpCall,
         (ctx, namespace): Context<
             'a,
             'cursor,
             impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
         >,
-        locate_variable: &dyn Fn(&Weak<Symbol>) -> BoxDoc<'a>,
+        locator: &L,
     ) -> BoxDoc<'a> {
         let alloc = ctx.alloc;
         match op_call {
@@ -1978,7 +2062,7 @@ mod value_from_expression {
                 alloc.text(string).into_doc()
             }
             OpCall::Unary(unary_op, operand) => {
-                let operand = operand.generate_as_value((ctx, namespace.clone()), locate_variable);
+                let operand = operand.generate_as_value((ctx, namespace.clone()), locator);
                 match unary_op {
                     UnaryOp::Access { to, field } => {
                         let to = to.upgrade().expect("access from unknown type");
@@ -2016,11 +2100,11 @@ mod value_from_expression {
                 };
                 alloc
                     .text("(")
-                    .append(lhs.generate_as_value((ctx, namespace.clone()), locate_variable))
+                    .append(lhs.generate_as_value((ctx, namespace.clone()), locator))
                     .append(alloc.space())
                     .append(op)
                     .append(alloc.space())
-                    .append(rhs.generate_as_value((ctx, namespace), locate_variable))
+                    .append(rhs.generate_as_value((ctx, namespace), locator))
                     .append(")")
                     .into_doc()
             }
@@ -2028,16 +2112,16 @@ mod value_from_expression {
     }
 
     impl<'a> Constructor {
-        fn generate_call_as_value<'cursor>(
+        fn generate_call_as_value<'cursor, L: Locator<'a>>(
             &self,
             (ctx, namespace): Context<
                 'a,
                 'cursor,
                 impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
             >,
-            locate_variable: &dyn Fn(&Weak<Symbol>) -> BoxDoc<'a>,
-            implicits: &Vec<ValueExpression>,
-            arguments: &Vec<ValueExpression>,
+            locator: &L,
+            implicits: &[ValueExpression],
+            arguments: &[ValueExpression],
         ) -> BoxDoc<'a> {
             assert!(arguments.len() == self.fields.len());
 
@@ -2045,61 +2129,18 @@ mod value_from_expression {
 
             let ty = self.result_type.get_type();
 
-            let (type_module_prefix, type_module_cursor) = ty
-                .lookup_type_module((ctx, namespace.clone()))
-                .expect("couldn't lookup type module");
-
-            let mut constructor_func = Some(type_module_prefix);
-
-            type_module_cursor
-                .clone()
-                .lookup_generated::<objects::Type>(ObjectId(
-                    NodeId::id_rc(&ty),
-                    Tag::String("type"),
-                ))
-                .expect("couldn't lookup message type")
-                .apply(|_, generated| {
-                    constructor_func = Some(
-                        constructor_func.take().unwrap().append(
-                            objects::GeneratedType::try_from(generated)
-                                .expect("expected type")
-                                .to_doc(ctx),
-                        ),
-                    );
-                });
-
-            type_module_cursor
-                .lookup_generated::<objects::Scope>(ObjectId(
-                    NodeId::id_rc(&ty),
-                    Tag::String("inherent_impl"),
-                ))
-                .expect("couldn't lookup inherent impl")
-                .lookup_generated::<objects::Function>(ObjectId(NodeId::id(self), Tag::None))
-                .expect("couldn't lookup type constructor")
-                .apply(|_, generated| {
-                    constructor_func = Some(
-                        constructor_func.take().unwrap().append("::").append(
-                            objects::GeneratedFunction::try_from(generated)
-                                .expect("expected function")
-                                .to_doc(ctx),
-                        ),
-                    );
-                });
-
-            constructor_func
-                .unwrap()
+            locator
+                .locate_constructor((ctx, namespace.clone()), self)
                 .append("(")
                 .append(
                     alloc.intersperse(
                         implicits
                             .iter()
-                            .map(|expr| {
-                                expr.generate_as_value((ctx, namespace.clone()), locate_variable)
-                            })
+                            .map(|expr| expr.generate_as_value((ctx, namespace.clone()), locator))
                             .collect::<Vec<_>>()
                             .into_iter()
                             .chain(arguments.iter().map(|expr| {
-                                expr.generate_as_value((ctx, namespace.clone()), locate_variable)
+                                expr.generate_as_value((ctx, namespace.clone()), locator)
                             })),
                         alloc.text(",").append(alloc.line()),
                     ),
@@ -2270,7 +2311,7 @@ impl<'a> Type {
                         objects::GeneratedModule::try_from(generated)
                             .expect("expected module")
                             .to_doc(ctx),
-                    )
+                    );
                 })
                 .lookup_generated::<objects::Type>(ObjectId(NodeId::id(self), Tag::String("type")))?
                 .apply(|_, generated| {
@@ -2280,7 +2321,7 @@ impl<'a> Type {
                                 .expect("expected type")
                                 .to_doc(ctx),
                         ),
-                    )
+                    );
                 });
             Some((path.unwrap().append("::"), cursor))
         }
@@ -2371,16 +2412,12 @@ impl<'a> ValueExpression {
                     .append(alloc.space())
                     .append("{")
                     .append(alloc.space())
-                    .append(
-                        alloc.intersperse(
-                            fields.into_iter().zip(arguments.into_iter()).map(
-                                |(field, argument)| {
-                                    field.append(":").append(alloc.space()).append(argument)
-                                },
-                            ),
-                            alloc.text(",").append(alloc.space()),
-                        ),
-                    )
+                    .append(alloc.intersperse(
+                        fields.into_iter().zip(arguments).map(|(field, argument)| {
+                            field.append(":").append(alloc.space()).append(argument)
+                        }),
+                        alloc.text(",").append(alloc.space()),
+                    ))
                     .append(alloc.space())
                     .append("}")
             }
