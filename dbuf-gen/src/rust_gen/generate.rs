@@ -711,7 +711,7 @@ mod type_inherent_impl {
 
     struct ConstructorObjectsLocator {}
 
-    impl<'a> super::value_from_expression::Locator<'a> for ConstructorObjectsLocator {}
+    impl super::value_from_expression::Locator<'_> for ConstructorObjectsLocator {}
 
     impl<'a> Type {
         pub(super) fn generate_inherent_impl(
@@ -1796,6 +1796,7 @@ mod type_inherent_impl {
             }
         }
 
+        #[allow(clippy::too_many_lines, reason = "??? (114/100)")]
         fn generate_constructor_call(
             &self,
             (ctx, namespace): MutContext<'a, '_, '_>,
