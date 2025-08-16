@@ -17,7 +17,7 @@ struct CodeLensVisitor<'a> {
 }
 
 impl CodeLensVisitor<'_> {
-    fn new(file: &File) -> CodeLensVisitor {
+    fn new(file: &File) -> CodeLensVisitor<'_> {
         CodeLensVisitor {
             file,
             result: Vec::new(),

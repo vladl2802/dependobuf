@@ -37,7 +37,7 @@ pub struct AstScope<'a> {
 }
 
 impl<'a> AstScope<'a> {
-    pub fn new(elaborated: &ElaboratedAst) -> AstScope {
+    pub fn new(elaborated: &ElaboratedAst) -> AstScope<'_> {
         AstScope {
             elaborated,
             type_name: "",

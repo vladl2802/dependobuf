@@ -98,7 +98,7 @@ struct SemanticTokenVisitor<'a> {
 }
 
 impl SemanticTokenVisitor<'_> {
-    fn new(file: &File) -> SemanticTokenVisitor {
+    fn new(file: &File) -> SemanticTokenVisitor<'_> {
         SemanticTokenVisitor {
             elaborated: file.get_elaborated(),
             last_line: 0,
