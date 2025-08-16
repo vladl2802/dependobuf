@@ -28,13 +28,14 @@ impl RenameCache {
     }
 
     pub fn get(&self, doc: &Url, version: i32, pos: Position) -> Option<Symbol> {
-        if let Ok(mut cache) = self.cache.lock() {
-            if let Some(url) = &cache.document {
-                if url == doc && cache.version == version && cache.pos == pos {
-                    cache.document.take();
-                    return Some(cache.symbol.take().expect("setted with document"));
-                }
-            }
+        if let Ok(mut cache) = self.cache.lock()
+            && let Some(url) = &cache.document
+            && url == doc
+            && cache.version == version
+            && cache.pos == pos
+        {
+            cache.document.take();
+            return Some(cache.symbol.take().expect("setted with document"));
         }
 
         None

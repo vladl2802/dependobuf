@@ -48,7 +48,7 @@ pub struct Navigator<'a> {
 
 impl Navigator<'_> {
     /// Creates navigator for file.
-    pub fn new(file: &File) -> Navigator {
+    pub fn new(file: &File) -> Navigator<'_> {
         Navigator {
             parsed: file.get_parsed(),
             elaborated: file.get_elaborated(),
