@@ -127,10 +127,9 @@ fn test_valid_prepare() {
 fn test_invalid_prepare() {
     let s = Scenario::new();
 
-    #[allow(clippy::needless_for_each)]
-    INVALID_RENAME
-        .iter()
-        .for_each(|p| s.expect_invalid_prepare_rename(*p));
+    for p in INVALID_RENAME {
+        s.expect_invalid_prepare_rename(*p);
+    }
 }
 
 #[test]
