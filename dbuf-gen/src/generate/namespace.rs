@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
 use super::{
-    lookup::{Cursor, LookupResult, NodeCursor},
+    lookup::{Accessor, CursorBase, Walker},
     node::Node,
 };
 
@@ -19,7 +19,7 @@ pub struct NamespaceTree<'parent, Key, Value> {
     edge: Option<Edge<'parent, Key, Value>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum TreeCursorImpl<'me, Key, Value> {
     InTree {
         object: &'me Node<Key, Value>,
@@ -31,8 +31,14 @@ enum TreeCursorImpl<'me, Key, Value> {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct NamespaceCursor<'me, Key, Value>(TreeCursorImpl<'me, Key, Value>);
+
+#[derive(Debug, Clone, Copy)]
+pub struct TreeCursorState<'me, Key, Value> {
+    pub node: &'me Node<Key, Value>,
+    pub key: Option<&'me Key>,
+}
 
 #[allow(dead_code, reason = "??? (some methods are never used)")]
 impl<Key: Eq + Hash + Clone, Value: Clone> NamespaceTree<'_, Key, Value> {
@@ -99,16 +105,9 @@ impl<Key: Eq + Hash + Clone, Value: Clone> NamespaceTree<'_, Key, Value> {
             edge: self.edge.as_ref(),
         })
     }
-
-    pub fn lookup<'me, F, R>(&'me self, f: F) -> Option<R>
-    where
-        F: FnMut(&NamespaceCursor<'me, Key, Value>, &Value) -> LookupResult<Key, R>,
-    {
-        self.cursor().lookup(f)
-    }
 }
 
-impl<'me, Key: Eq + Hash, Value> TreeCursorImpl<'me, Key, Value> {
+impl<'me, Key, Value> TreeCursorImpl<'me, Key, Value> {
     fn node(&self) -> &'me Node<Key, Value> {
         match self {
             TreeCursorImpl::InTree {
@@ -129,7 +128,7 @@ impl<'me, Key: Eq + Hash, Value> TreeCursorImpl<'me, Key, Value> {
         }
     }
 
-    fn go_back(&self) -> Option<Self> {
+    fn back(&self) -> Option<Self> {
         if let TreeCursorImpl::OnStack { object: _, edge } = self {
             edge.map(
                 |Edge {
@@ -149,34 +148,46 @@ impl<'me, Key: Eq + Hash, Value> TreeCursorImpl<'me, Key, Value> {
     }
 }
 
-impl<'me, Key: Eq + Hash + Clone, Value: Clone> Cursor<&'me Value, Key>
+impl<'me, Key, Value> Accessor<TreeCursorState<'me, Key, Value>>
     for NamespaceCursor<'me, Key, Value>
 {
-    fn value(&self) -> &'me Value {
-        &self.0.node().detail
-    }
-
-    fn key(&self) -> Option<&'me Key> {
-        self.0.key()
-    }
-
-    fn go_back(self) -> Option<Self> {
-        Some(NamespaceCursor(self.0.go_back()?))
-    }
-
-    fn next(self, key: &Key) -> Option<Self> {
-        let (associated_with, object) = self.0.node().next_with_key(key)?;
-        Some(NamespaceCursor(TreeCursorImpl::InTree {
-            object,
-            associated_with,
-        }))
+    fn state(&self) -> TreeCursorState<'me, Key, Value> {
+        TreeCursorState {
+            node: self.0.node(),
+            key: self.0.key(),
+        }
     }
 }
 
-impl<Key: Eq + Hash + Clone, Value: Clone> NodeCursor<Value, Key>
-    for NamespaceCursor<'_, Key, Value>
+impl<'me, Key: Eq + Hash, Value> Walker<Key> for NamespaceCursor<'me, Key, Value> {
+    fn walk_next(&mut self, key: &Key) -> bool {
+        match self.0.node().next_with_key(key) {
+            Some((associated_with, node)) => {
+                *self = NamespaceCursor(TreeCursorImpl::InTree {
+                    object: node,
+                    associated_with,
+                });
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn walk_back(&mut self) -> bool {
+        match self.0.back() {
+            Some(cursor) => {
+                *self = NamespaceCursor(cursor);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl<'me, Key: Eq + Hash + Clone, Value: Clone> CursorBase<Key, TreeCursorState<'me, Key, Value>>
+    for NamespaceCursor<'me, Key, Value>
 {
-    fn node(&self) -> &Node<Key, Value> {
-        self.0.node()
+    fn clone_boxed(&self) -> Box<dyn CursorBase<Key, TreeCursorState<'me, Key, Value>> + '_> {
+        Box::new(self.clone())
     }
 }

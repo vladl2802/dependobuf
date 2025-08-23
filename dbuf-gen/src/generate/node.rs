@@ -32,7 +32,7 @@ impl<Key: Eq + Hash, Value> Node<Key, Value> {
         self.nested.remove(key)
     }
 
-    pub(super) fn detail(&self) -> &Value {
+    pub fn detail(&self) -> &Value {
         &self.detail
     }
 

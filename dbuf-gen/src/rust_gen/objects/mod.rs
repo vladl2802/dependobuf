@@ -4,14 +4,13 @@ mod scope;
 mod ty;
 mod variable;
 
-use std::collections::HashMap;
+use crate::{ast::NodeId, rust_gen::context::GeneratedCursor};
 
-use crate::{ast::NodeId, generate::lookup::Cursor};
+use super::context::GeneratedNavigator;
 
 pub use function::{Function, GeneratedFunction};
 pub use module::{GeneratedModule, Module};
-#[allow(unused_imports, reason = "scopes currently are not generated ?")]
-pub use scope::{GeneratedScope, Scope};
+pub use scope::Scope;
 pub use ty::{GeneratedType, Type};
 #[allow(unused_imports, reason = "variable currently are not generated ?")]
 pub use variable::{GeneratedVariable, Variable};
@@ -51,13 +50,15 @@ pub trait Object<'id>: Sized {
 
     fn backwards_lookup_limit(generated: &GeneratedRustObject) -> bool;
 
-    fn lookup_tag<'c, C>(cursor: C, object: &RustObject) -> Option<u64>
+    fn tag_navigator<'cursor, C: GeneratedCursor<'cursor, 'id>>()
+    -> impl GeneratedNavigator<'cursor, 'id, C, u64>
     where
-        C: Cursor<(&'c HashMap<RustObject, u64>, &'c GeneratedRustObject), ObjectId<'id>>;
+        'id: 'cursor;
 
-    fn lookup_visible<'c, C>(cursor: C, id: ObjectId<'id>) -> Option<C>
+    fn visible_navigator<'cursor, C: GeneratedCursor<'cursor, 'id>>()
+    -> impl GeneratedNavigator<'cursor, 'id, C, Self>
     where
-        C: Cursor<&'c GeneratedRustObject, ObjectId<'id>> + Clone;
+        'id: 'cursor;
 
     fn rust_object(&self) -> RustObject;
 
@@ -73,7 +74,6 @@ pub trait GeneratedObject<'me>:
     Into<GeneratedRustObject>
     + TryFrom<GeneratedRustObject, Error = ()>
     + TryFrom<&'me GeneratedRustObject, Error = ()>
-    + Clone
 {
 }
 

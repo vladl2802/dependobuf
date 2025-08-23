@@ -6,23 +6,34 @@ pub enum NavigateResult<Key, Result> {
 }
 
 pub trait Accessor<State> {
-    fn state(self) -> State;
+    fn state(&self) -> State;
 }
 
-pub trait Walker<Key> {
-    fn next(&mut self, key: &Key) -> bool;
+pub(super) trait Walker<Key> {
+    fn walk_next(&mut self, key: &Key) -> bool;
 
-    fn back(&mut self) -> bool;
+    fn walk_back(&mut self) -> bool;
 }
 
-pub trait CursorBase<Key, State>: Walker<Key> + Accessor<State> {}
+pub trait CursorBase<Key, State>: Walker<Key> + Accessor<State> {
+    fn clone_boxed(&self) -> Box<dyn CursorBase<Key, State> + '_>;
+}
 
-pub trait Cursor<Key, State>: Sized + CursorBase<Key, State> {
+pub trait Cursor<Key, State: Clone>: Sized + CursorBase<Key, State> {
+    fn next(mut self, key: &Key) -> Option<Self> {
+        self.walk_next(key).then_some(self)
+    }
+
+    fn back(mut self) -> Option<Self> {
+        self.walk_back().then_some(self)
+    }
+
     fn map<SResult, CResult>(
         self,
         f: impl FnOnce(Self, State) -> (CResult, SResult),
     ) -> StatefulCursor<SResult, CResult> {
-        let (state, cursor) = f(self.state, self.cursor);
+        let state = self.state().clone();
+        let (cursor, state) = f(self, state);
         StatefulCursor { state, cursor }
     }
 
@@ -44,13 +55,16 @@ pub trait Cursor<Key, State>: Sized + CursorBase<Key, State> {
         }
     }
 
-    fn map_with_state<SAdd, SResult>(
+    fn map_with_state<SAdd: Clone, SResult: Clone>(
         self,
         state: SAdd,
         f: impl FnOnce(State, SAdd) -> SResult,
-    ) -> StatefulCursor<SResult, Self> {
-        self.with_state(state)
-            .map(|cursor, state| f(cursor.state, state))
+    ) -> StatefulCursor<SResult, Self>
+    where
+        Self: Clone,
+    {
+        let additional = state;
+        self.map_state(move |state| f(state, additional))
     }
 
     fn navigate<O, N: Navigator<Key, Self, O>>(
@@ -58,18 +72,18 @@ pub trait Cursor<Key, State>: Sized + CursorBase<Key, State> {
         mut navigator: N,
     ) -> Option<StatefulCursor<O, Self>> {
         let result = loop {
-            match navigator.decide(self) {
-                NavigateResult::GoBack => self.back().then(())?,
-                NavigateResult::GoNext(id) => self.next(&id).then(())?,
+            match navigator.decide(&mut self) {
+                NavigateResult::GoBack => self = self.back()?,
+                NavigateResult::GoNext(id) => self = self.next(&id)?,
                 NavigateResult::Stop(result) => break result,
-            }
+            };
         };
 
         Some(self.with_state(result))
     }
 }
 
-impl<K, S, C: CursorBase<K, S> + Sized> Cursor<K, S> for C {}
+impl<K, S: Clone, C: Sized + CursorBase<K, S>> Cursor<K, S> for C {}
 
 pub trait Navigator<Key, Cursor: Walker<Key>, Result> {
     fn decide(&mut self, cursor: &Cursor) -> NavigateResult<Key, Result>;
@@ -117,34 +131,38 @@ impl<SOutter, SInner, C> StatefulCursor<SOutter, StatefulCursor<SInner, C>> {
 }
 
 impl<K, S, C: Walker<K>> Walker<K> for StatefulCursor<S, C> {
-    fn next(&mut self, key: &K) -> bool {
-        self.cursor.next(key)
+    fn walk_next(&mut self, key: &K) -> bool {
+        self.cursor.walk_next(key)
     }
 
-    fn back(&mut self) -> bool {
-        self.cursor.back()
-    }
-}
-
-impl<S, C> Accessor<S> for StatefulCursor<S, C> {
-    fn state(self) -> S {
-        self.state
+    fn walk_back(&mut self) -> bool {
+        self.cursor.walk_back()
     }
 }
 
-impl<K, S, C: Walker<K>> CursorBase<K, S> for StatefulCursor<S, C> {}
-
-#[derive(Clone, Debug)]
-pub struct DynCursor<Key> {
-    cursor: Box<dyn Walker<Key>>,
+impl<S: Clone, C> Accessor<S> for StatefulCursor<S, C> {
+    fn state(&self) -> S {
+        self.state.clone()
+    }
 }
 
-impl<K> Walker<K> for DynCursor<K> {
-    fn next(&mut self, key: &K) -> bool {
-        self.cursor.next(key)
+impl<K, S: Clone, C: Walker<K> + Clone> CursorBase<K, S> for StatefulCursor<S, C> {
+    fn clone_boxed(&self) -> Box<dyn CursorBase<K, S> + '_> {
+        Box::new(self.clone())
+    }
+}
+
+// #[derive(Debug)]
+pub struct DynCursor<Key, State> {
+    cursor: Box<dyn CursorBase<Key, State>>,
+}
+
+impl<K, S> Walker<K> for DynCursor<K, S> {
+    fn walk_next(&mut self, key: &K) -> bool {
+        self.cursor.walk_next(key)
     }
 
-    fn back(&mut self) -> bool {
-        self.cursor.back()
+    fn walk_back(&mut self) -> bool {
+        self.cursor.walk_back()
     }
 }

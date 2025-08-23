@@ -11,7 +11,7 @@ pub struct GlobalContext<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{lookup::Cursor, namespace::NamespaceTree};
+    use super::namespace::NamespaceTree;
 
     #[test]
     fn basic() {

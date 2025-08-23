@@ -1,59 +1,76 @@
-use std::{collections::HashMap, hash::Hash, marker::PhantomData, mem::ManuallyDrop};
-
-pub use crate::generate::node;
+use std::{collections::HashMap, mem::ManuallyDrop};
 
 use crate::{
     ast::NodeId,
     generate::{
         GlobalContext,
-        lookup::{Cursor, LookupResult, NodeCursor},
-        namespace::NamespaceTree,
+        lookup::{Cursor, NavigateResult, Navigator},
+        namespace::{self, NamespaceTree},
+        node,
     },
 };
 
 use super::objects::{self, GeneratedRustObject, Kind, Object, ObjectId, RustObject};
 
-// TODO: need to introduce IntoCursor trait that is analogues to IntoIterator. Because for now I need to write really awful constructions such as:
-// context::GeneratedCursor<'cursor, 'a, impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>
+// Lifetimes naming:
+// 'a - global lifetime for everything that has lifetime spanning whole codegen step.
+// Currently there is only BoxAllocator that uses this lifetime.
+// 'id - global lifetime for everything related to ast::NodeId and therefore to ObjectId. It is ast lifetime.
+// Which from the view of codegen must be the same as 'a.
+// 'me - often used in the context of Cursors with the idea, that Cursor borrows Tree for some lifetime
+// and therefore anything, that is borrowed during this, has this lifetime. Maybe should be renamed to 'c (short for 'cursor)
+
+// This file currenly has an awful structure. It defines many aliases for the commonly used types and traits and also defines NamingContext.
+// So it should be split into two parts.
 
 pub type MutContext<'a, 'parent, 'me> = (GlobalContext<'a>, &'me mut NamingContext<'a, 'parent>);
 
-pub type Context<'a, 'me, C> = (GlobalContext<'a>, GeneratedCursor<'me, 'a, C>);
+pub type Context<'a, 'me, C: GeneratedCursor<'a, 'me>> = (GlobalContext<'a>, C);
 
-pub type Node<'id> = node::Node<ObjectId<'id>, Container>;
+pub type Node<'id> = node::Node<ObjectId<'id>, NodeInfo>;
+
+pub trait GeneratedCursor<'me, 'id: 'me>: Cursor<ObjectId<'id>, CursorState<'me, 'id>> {}
+
+impl<'me, 'id: 'me, C> GeneratedCursor<'me, 'id> for C where
+    C: Cursor<ObjectId<'id>, CursorState<'me, 'id>>
+{
+}
+
+pub trait GeneratedNavigator<'me, 'id: 'me, C: GeneratedCursor<'me, 'id>, Result>:
+    Navigator<ObjectId<'id>, C, Result>
+{
+}
+
+impl<'me, 'id: 'me, C, Result, N> GeneratedNavigator<'me, 'id, C, Result> for N
+where
+    C: GeneratedCursor<'me, 'id>,
+    N: Navigator<ObjectId<'id>, C, Result>,
+{
+}
 
 #[derive(Debug, Clone)]
-pub struct Container {
+pub struct CursorState<'me, 'id>(namespace::TreeCursorState<'me, ObjectId<'id>, NodeInfo>);
+
+#[derive(Debug, Clone)]
+pub struct NodeInfo {
     object: GeneratedRustObject,
     tags: HashMap<RustObject, u64>,
 }
 
 #[derive(Debug)]
 pub struct NamingContext<'id, 'parent>(
-    ManuallyDrop<NamespaceTree<'parent, ObjectId<'id>, Container>>,
+    ManuallyDrop<NamespaceTree<'parent, ObjectId<'id>, NodeInfo>>,
 );
 
-#[derive(Debug, Clone)]
-pub struct GeneratedCursor<'cursor, 'id, C>
-where
-    C: Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-{
-    cursor: C,
-    _value: PhantomData<&'cursor GeneratedRustObject>,
-    _key: PhantomData<&'cursor ObjectId<'id>>,
-}
-
-#[allow(dead_code, reason = "??? (object is never read)")]
 #[derive(Clone)]
 pub struct Name {
     object: RustObject,
     tag: u64,
 }
 
-#[allow(dead_code, reason = "??? (some methods are never used)")]
 impl<'id> NamingContext<'id, '_> {
     fn wrap_namespace_tree<'a>(
-        namespace_tree: NamespaceTree<'a, ObjectId<'id>, Container>,
+        namespace_tree: NamespaceTree<'a, ObjectId<'id>, NodeInfo>,
     ) -> NamingContext<'id, 'a> {
         NamingContext(ManuallyDrop::new(namespace_tree))
     }
@@ -71,7 +88,7 @@ impl<'id> NamingContext<'id, '_> {
             generated.clone(),
             Self::wrap_namespace_tree(self.0.insert(
                 id,
-                Container {
+                NodeInfo {
                     object: generated.into(),
                     tags: HashMap::new(),
                 },
@@ -80,7 +97,7 @@ impl<'id> NamingContext<'id, '_> {
     }
 
     pub fn root() -> Self {
-        Self::wrap_namespace_tree(NamespaceTree::root(Container {
+        Self::wrap_namespace_tree(NamespaceTree::root(NodeInfo {
             object: objects::Scope::new(ObjectId(
                 NodeId::owned("root".to_owned()),
                 objects::Tag::None,
@@ -95,21 +112,10 @@ impl<'id> NamingContext<'id, '_> {
         &'cursor mut self,
         id: &ObjectId<'id>,
         tree: Node<'id>,
-    ) -> GeneratedCursor<
-        'cursor,
-        'id,
-        impl NodeCursor<Container, ObjectId<'id>> + Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-    > {
+    ) -> impl GeneratedCursor<'id, 'cursor> {
         self.0.insert_tree(id.clone(), tree);
 
-        GeneratedCursor {
-            cursor: self
-                .cursor()
-                .next(id)
-                .expect("newly inserted tree couldn't be accessed"),
-            _value: PhantomData,
-            _key: PhantomData,
-        }
+        self.cursor().walk_next(id)
     }
 
     pub fn remove_tree(&mut self, id: &ObjectId<'id>) -> Option<Node<'id>> {
@@ -142,7 +148,7 @@ impl<'id> NamingContext<'id, '_> {
             generated.clone(),
             Self::wrap_namespace_tree(self.0.insert(
                 id,
-                Container {
+                NodeInfo {
                     object: generated.into(),
                     tags: HashMap::new(),
                 },
@@ -178,102 +184,18 @@ impl<'id> NamingContext<'id, '_> {
         self.insert_object(object, &name)
     }
 
-    pub fn cursor<'cursor>(
-        &'cursor self,
-    ) -> GeneratedCursor<
-        'cursor,
-        'id,
-        impl NodeCursor<Container, ObjectId<'id>> + Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-    > {
-        GeneratedCursor {
-            cursor: self.0.cursor().value_map(|node| &node.object),
-            _value: PhantomData,
-            _key: PhantomData,
-        }
-    }
-
-    #[allow(
-        clippy::type_complexity,
-        reason = "type TypeName<'lifetime> = ... is unstable"
-    )]
-    pub fn get_generated<'cursor, O: Object<'id>>(
-        &'cursor self,
-        id: ObjectId<'id>,
-    ) -> Option<(
-        O::Generated,
-        GeneratedCursor<
-            'cursor,
-            'id,
-            impl NodeCursor<Container, ObjectId<'id>>
-            + Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-        >,
-    )> {
-        self.cursor().get_generated::<O>(id)
+    pub fn cursor<'cursor>(&'cursor self) -> impl GeneratedCursor<'cursor, 'id> {
+        self.0.cursor().map_state(|state| CursorState(state))
     }
 }
 
-impl<'cursor, 'id, C> Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>
-    for GeneratedCursor<'cursor, 'id, C>
-where
-    C: Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-{
-    fn value(&self) -> &'cursor GeneratedRustObject {
-        self.cursor.value()
+impl<'me, 'id> CursorState<'me, 'id> {
+    pub fn object(&self) -> &GeneratedRustObject {
+        &self.0.node.detail().object
     }
 
-    fn key(&self) -> Option<&ObjectId<'id>> {
-        self.cursor.key()
-    }
-
-    fn go_back(self) -> Option<Self> {
-        Some(GeneratedCursor::new(self.cursor.go_back()?))
-    }
-
-    fn next(self, key: &ObjectId<'id>) -> Option<Self> {
-        Some(GeneratedCursor::new(self.cursor.next(key)?))
-    }
-}
-
-impl<'cursor, 'id, Key, Value, C> NodeCursor<Value, Key> for GeneratedCursor<'cursor, 'id, C>
-where
-    Key: Eq + Hash,
-    C: NodeCursor<Value, Key> + Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-{
-    fn node(&self) -> &node::Node<Key, Value> {
-        self.cursor.node()
-    }
-}
-
-impl<'cursor, 'id, C> GeneratedCursor<'cursor, 'id, C>
-where
-    C: Cursor<&'cursor GeneratedRustObject, ObjectId<'id>>,
-{
-    pub fn new(cursor: C) -> Self {
-        GeneratedCursor {
-            cursor,
-            _value: PhantomData,
-            _key: PhantomData,
-        }
-    }
-
-    pub fn lookup_generated<O: Object<'id>>(self, id: ObjectId<'id>) -> Option<Self> {
-        O::lookup_visible(self, id)
-    }
-
-    pub fn get_generated<O: Object<'id>>(self, id: ObjectId<'id>) -> Option<(O::Generated, Self)> {
-        let cursor = self.lookup_generated::<O>(id)?;
-        Some((cursor.value().try_into().ok()?, cursor))
-    }
-
-    pub fn lookup_module_root(self) -> Self {
-        self.lookup(|cursor, generated| {
-            if generated.kind() == Kind::Module || cursor.clone().go_back().is_none() {
-                LookupResult::Stop(cursor.clone())
-            } else {
-                LookupResult::GoBack
-            }
-        })
-        .expect("should be impossible")
+    pub fn associated_with(&self) -> &Option<&ObjectId<'id>> {
+        &self.0.key
     }
 }
 
@@ -281,5 +203,19 @@ impl Drop for NamingContext<'_, '_> {
     fn drop(&mut self) {
         // SAFETY: we are in drop so there will be no usage after
         unsafe { ManuallyDrop::take(&mut self.0) }.finish();
+    }
+}
+
+struct ModuleRootNavigator {}
+
+impl<'me, 'id: 'me, C: GeneratedCursor<'me, 'id> + Clone> Navigator<ObjectId<'id>, C, ()>
+    for ModuleRootNavigator
+{
+    fn decide(&mut self, cursor: &C) -> NavigateResult<ObjectId<'id>, ()> {
+        if cursor.state().object().kind() == Kind::Module || cursor.clone().back().is_none() {
+            NavigateResult::Stop(())
+        } else {
+            NavigateResult::GoBack
+        }
     }
 }
