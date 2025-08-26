@@ -11,9 +11,7 @@ use dbuf_core::ast::operators::*;
 use dbuf_core::ast::parsed::definition::*;
 use dbuf_core::ast::parsed::*;
 
-use crate::core::ast_access::{
-    Loc, LocStringHelper, LocationHelpers, Position, PositionHelpers, Str,
-};
+use crate::core::ast_access::{Loc, LocNameHelper, LocationHelper, Position, PositionHelper, Str};
 
 #[derive(Debug, Copy, Clone)]
 struct Pos {
@@ -78,7 +76,6 @@ impl<'a, W: Write> PrettyPrinter<'a, W> {
         s.set_location_start(self.cursor.into());
         self.cursor.column += s.len();
         write!(self.writer, "{s}")?;
-        s.set_location_end(self.cursor.into());
         Ok(())
     }
 
