@@ -112,10 +112,15 @@ impl<'id> NamingContext<'id, '_> {
         &'cursor mut self,
         id: &ObjectId<'id>,
         tree: Node<'id>,
-    ) -> impl GeneratedCursor<'id, 'cursor> {
+    ) -> impl GeneratedCursor<'cursor, 'id>
+    where
+        'id: 'cursor,
+    {
         self.0.insert_tree(id.clone(), tree);
 
-        self.cursor().walk_next(id)
+        self.cursor()
+            .next(id)
+            .expect("newly inserted tree couldn't be accessed")
     }
 
     pub fn remove_tree(&mut self, id: &ObjectId<'id>) -> Option<Node<'id>> {
@@ -123,10 +128,7 @@ impl<'id> NamingContext<'id, '_> {
     }
 
     pub fn name_object<O: Object<'id>>(&mut self, object: &O) -> Name {
-        let tag = match O::lookup_tag(
-            self.0.cursor().value_map(|node| (&node.tags, &node.object)),
-            &object.rust_object(),
-        ) {
+        let tag = match O::lookup_tag(self.cursor(), &object.rust_object()) {
             Some(tag) => tag + 1,
             None => 0,
         };
@@ -161,10 +163,7 @@ impl<'id> NamingContext<'id, '_> {
         object: O,
     ) -> Option<(O::Generated, NamingContext<'id, 'child>)> {
         let rust_object = object.rust_object();
-        match O::lookup_tag(
-            self.0.cursor().value_map(|node| (&node.tags, &node.object)),
-            &rust_object,
-        ) {
+        match O::lookup_tag(self.cursor(), &rust_object) {
             Some(_) => None,
             None => Some(self.insert_object(
                 object,
@@ -184,7 +183,7 @@ impl<'id> NamingContext<'id, '_> {
         self.insert_object(object, &name)
     }
 
-    pub fn cursor<'cursor>(&'cursor self) -> impl GeneratedCursor<'cursor, 'id> {
+    pub fn cursor<'cursor>(&'cursor self) -> impl GeneratedCursor<'cursor, 'id> + Clone {
         self.0.cursor().map_state(|state| CursorState(state))
     }
 }

@@ -40,7 +40,7 @@ pub struct GeneratedRustObject {
 
 #[allow(dead_code, reason = "??? (some items are never used)")]
 pub trait Object<'id>: Sized {
-    type Generated: for<'me> GeneratedObject<'me>;
+    type Generated: for<'me> GeneratedObject<'me> + Clone;
 
     fn object_id(&self) -> ObjectId<'id>;
 
