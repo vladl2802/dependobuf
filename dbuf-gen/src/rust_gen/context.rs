@@ -4,7 +4,7 @@ use crate::{
     ast::NodeId,
     generate::{
         GlobalContext,
-        lookup::{Cursor, NavigateResult, Navigator},
+        lookup::{Accessor, Cursor, NavigateResult, Navigator, StatefulCursor},
         namespace::{self, NamespaceTree},
         node,
     },
@@ -29,7 +29,45 @@ pub type Context<'a, 'me, C: GeneratedCursor<'a, 'me>> = (GlobalContext<'a>, C);
 
 pub type Node<'id> = node::Node<ObjectId<'id>, NodeInfo>;
 
-pub trait GeneratedCursor<'me, 'id: 'me>: Cursor<ObjectId<'id>, CursorState<'me, 'id>> {}
+pub trait GeneratedCursor<'me, 'id: 'me>: Cursor<ObjectId<'id>, CursorState<'me, 'id>> {
+    fn navigate_generated<O: Object<'id>>(
+        self,
+        id: ObjectId<'id>,
+    ) -> Option<impl GeneratedCursor<'me, 'id>>
+    where
+        Self: Clone,
+    {
+        O::navigate_visible(self, id)
+    }
+
+    fn get_generated<O: Object<'id>>(
+        self,
+        id: ObjectId<'id>,
+    ) -> Option<StatefulCursor<O::Generated, impl GeneratedCursor<'me, 'id>>>
+    where
+        Self: Clone,
+    {
+        Some(self.navigate_generated::<O>(id)?.map_state(|state| {
+            O::Generated::try_from(state.object())
+                .expect("objects with provided exists but it is other object kind")
+        }))
+    }
+
+    fn navigate_module_root(self) -> impl GeneratedCursor<'me, 'id>
+    where
+        Self: Clone,
+    {
+        self.navigate(|cursor: &Self| {
+            if cursor.state().object().kind() == Kind::Module || cursor.clone().back().is_none() {
+                NavigateResult::Stop(cursor.clone())
+            } else {
+                NavigateResult::GoBack
+            }
+        })
+        .expect("should be impossible")
+        .state()
+    }
+}
 
 impl<'me, 'id: 'me, C> GeneratedCursor<'me, 'id> for C where
     C: Cursor<ObjectId<'id>, CursorState<'me, 'id>>

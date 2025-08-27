@@ -62,9 +62,9 @@ impl<'a> Type {
         let mut message_type_path: Option<DocBuilder<_>> = Some(alloc.text(""));
         namespace
             .cursor()
-            .lookup_generated::<objects::Module>(ObjectId(NodeId::id(self), Tag::String("module")))
+            .get_generated::<objects::Module>(ObjectId(NodeId::id(self), Tag::String("module")))
             .expect("couldn't get generated type module")
-            .apply(|_, object| {
+            .map(|_, object| {
                 // cast here is unnecessary, make GetGenerated preserve type that is was getting in the returned cursor
                 message_type_path = Some(
                     message_type_path.take().unwrap().append(

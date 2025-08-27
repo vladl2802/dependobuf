@@ -4,10 +4,10 @@ pub(super) use crate::{
         UnaryOp, ValueExpression,
     },
     format::{BoxDoc, DocAllocator, DocBuilder, NEST_UNIT},
-    generate::lookup::{Cursor, NodeCursor},
+    generate::lookup::{Accessor, Cursor},
 };
 
 pub(super) use super::{
-    context::{self, Context, MutContext},
+    context::{self, Context, GeneratedCursor, MutContext},
     objects::{self, ObjectId, Tag},
 };
