@@ -6,8 +6,6 @@ mod variable;
 
 use crate::{ast::NodeId, rust_gen::context::GeneratedCursor};
 
-use super::context::GeneratedNavigator;
-
 pub use function::{Function, GeneratedFunction};
 pub use module::{GeneratedModule, Module};
 pub use scope::Scope;
@@ -50,15 +48,18 @@ pub trait Object<'id>: Sized {
 
     fn backwards_lookup_limit(generated: &GeneratedRustObject) -> bool;
 
-    fn tag_navigator<'cursor, C: GeneratedCursor<'cursor, 'id>>()
-    -> impl GeneratedNavigator<'cursor, 'id, C, u64>
+    fn lookup_tag<'cursor, C>(cursor: C, object: &RustObject) -> Option<u64>
     where
-        'id: 'cursor;
+        'id: 'cursor,
+        C: GeneratedCursor<'cursor, 'id> + Clone;
 
-    fn visible_navigator<'cursor, C: GeneratedCursor<'cursor, 'id>>()
-    -> impl GeneratedNavigator<'cursor, 'id, C, Self>
+    fn navigate_visible<'cursor, C>(
+        cursor: C,
+        id: ObjectId<'id>,
+    ) -> Option<impl GeneratedCursor<'cursor, 'id>>
     where
-        'id: 'cursor;
+        'id: 'cursor,
+        C: GeneratedCursor<'cursor, 'id> + Clone;
 
     fn rust_object(&self) -> RustObject;
 

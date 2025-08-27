@@ -197,6 +197,10 @@ impl<'me, 'id> CursorState<'me, 'id> {
     pub fn associated_with(&self) -> &Option<&ObjectId<'id>> {
         &self.0.key
     }
+
+    pub fn tag_for(&self, object: &RustObject) -> Option<u64> {
+        self.0.node.detail().tags.get(object).copied()
+    }
 }
 
 impl Drop for NamingContext<'_, '_> {

@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
-use crate::generate::lookup::Cursor;
-
-use super::{GeneratedObject, GeneratedRustObject, Kind, Object, ObjectId, RustObject};
+use super::{
+    GeneratedCursor, GeneratedObject, GeneratedRustObject, Kind, Object, ObjectId, RustObject,
+};
 
 #[derive(Clone)]
 pub struct Scope<'id> {
@@ -35,20 +33,24 @@ impl<'id> Object<'id> for Scope<'id> {
         true
     }
 
-    fn lookup_tag<'c, C>(cursor: C, object: &RustObject) -> Option<u64>
+    fn lookup_tag<'cursor, C>(cursor: C, object: &RustObject) -> Option<u64>
     where
-        C: Cursor<(&'c HashMap<RustObject, u64>, &'c GeneratedRustObject), ObjectId<'id>>,
+        'id: 'cursor,
+        C: GeneratedCursor<'cursor, 'id>,
     {
-        cursor.value().0.get(object).copied()
+        cursor.state().tag_for(object)
     }
 
-    fn lookup_visible<'cursor, C>(cursor: C, id: ObjectId<'id>) -> Option<C>
+    fn navigate_visible<'cursor, C>(
+        cursor: C,
+        id: ObjectId<'id>,
+    ) -> Option<impl GeneratedCursor<'cursor, 'id>>
     where
-        C: Cursor<&'cursor GeneratedRustObject, ObjectId<'id>> + Clone,
+        'id: 'cursor,
+        C: GeneratedCursor<'cursor, 'id>,
     {
         cursor.next(&id)
     }
-
     fn rust_object(&self) -> RustObject {
         RustObject::Scope
     }

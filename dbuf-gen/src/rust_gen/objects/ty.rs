@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-
 use crate::{
     format::{BoxDoc, DocAllocator},
     generate::{
         GlobalContext,
-        lookup::{Cursor, LookupResult},
+        lookup::{Accessor, NavigateResult},
     },
 };
 
-use super::{GeneratedObject, GeneratedRustObject, Kind, Object, ObjectId, RustObject};
+use super::{
+    GeneratedCursor, GeneratedObject, GeneratedRustObject, Kind, Object, ObjectId, RustObject,
+};
 
 #[derive(Clone)]
 pub struct Type<'id> {
@@ -70,45 +70,52 @@ impl<'id> Object<'id> for Type<'id> {
         }
     }
 
-    fn lookup_tag<'c, C>(cursor: C, object: &RustObject) -> Option<u64>
+    fn lookup_tag<'cursor, C>(cursor: C, object: &RustObject) -> Option<u64>
     where
-        C: Cursor<(&'c HashMap<RustObject, u64>, &'c GeneratedRustObject), ObjectId<'id>>,
+        'id: 'cursor,
+        C: GeneratedCursor<'cursor, 'id> + Clone,
     {
         cursor
-            .lookup(|_, (tags, generated)| match tags.get(object) {
-                Some(tag) => LookupResult::Stop(Some(*tag)),
+            .navigate(|cursor: &C| match cursor.state().tag_for(object) {
+                Some(tag) => NavigateResult::Stop(Some(tag)),
                 None => {
-                    if Self::backwards_lookup_limit(generated) {
-                        LookupResult::Stop(None)
+                    if Self::backwards_lookup_limit(cursor.state().object()) {
+                        NavigateResult::Stop(None)
                     } else {
-                        LookupResult::GoBack
+                        NavigateResult::GoBack
                     }
                 }
             })
+            .map(|cursor| cursor.state())
             .flatten()
     }
 
-    fn lookup_visible<'c, C>(cursor: C, id: ObjectId<'id>) -> Option<C>
+    fn navigate_visible<'cursor, C>(
+        cursor: C,
+        id: ObjectId<'id>,
+    ) -> Option<impl GeneratedCursor<'cursor, 'id>>
     where
-        C: Cursor<&'c GeneratedRustObject, ObjectId<'id>> + Clone,
+        'id: 'cursor,
+        C: GeneratedCursor<'cursor, 'id> + Clone,
     {
         cursor
-            .lookup(|cursor, generated| {
-                if cursor.key() == Some(&id) {
-                    LookupResult::Stop(Some(cursor.clone()))
+            .navigate(|cursor: &C| {
+                if *cursor.state().associated_with() == Some(&id) {
+                    NavigateResult::Stop(Some(cursor.clone()))
                 } else {
                     match cursor.clone().next(&id) {
-                        Some(cursor) => LookupResult::Stop(Some(cursor)),
+                        Some(cursor) => NavigateResult::Stop(Some(cursor)),
                         None => {
-                            if Self::backwards_lookup_limit(generated) {
-                                LookupResult::Stop(None)
+                            if Self::backwards_lookup_limit(cursor.state().object()) {
+                                NavigateResult::Stop(None)
                             } else {
-                                LookupResult::GoBack
+                                NavigateResult::GoBack
                             }
                         }
                     }
                 }
             })
+            .map(|cursor| cursor.state())
             .flatten()
     }
 
