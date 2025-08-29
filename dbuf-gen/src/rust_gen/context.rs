@@ -29,7 +29,9 @@ pub type Context<'a, 'me, C: GeneratedCursor<'a, 'me>> = (GlobalContext<'a>, C);
 
 pub type Node<'id> = node::Node<ObjectId<'id>, NodeInfo>;
 
-pub trait GeneratedCursor<'me, 'id: 'me>: Cursor<ObjectId<'id>, CursorState<'me, 'id>> {
+pub trait GeneratedCursor<'me, 'id: 'me>:
+    Cursor<ObjectId<'id>, CursorState<'me, 'id>> + Clone
+{
     fn navigate_generated<O: Object<'id>>(
         self,
         id: ObjectId<'id>,
@@ -47,10 +49,12 @@ pub trait GeneratedCursor<'me, 'id: 'me>: Cursor<ObjectId<'id>, CursorState<'me,
     where
         Self: Clone,
     {
-        Some(self.navigate_generated::<O>(id)?.map_state(|state| {
-            O::Generated::try_from(state.object())
-                .expect("objects with provided exists but it is other object kind")
-        }))
+        self.navigate_generated::<O>(id).map(|cursor| {
+            cursor.map_with_state((), |state, _| {
+                O::Generated::try_from(state.object())
+                    .expect("objects with provided exists but it is other object kind")
+            })
+        })
     }
 
     fn navigate_module_root(self) -> impl GeneratedCursor<'me, 'id>
@@ -70,7 +74,7 @@ pub trait GeneratedCursor<'me, 'id: 'me>: Cursor<ObjectId<'id>, CursorState<'me,
 }
 
 impl<'me, 'id: 'me, C> GeneratedCursor<'me, 'id> for C where
-    C: Cursor<ObjectId<'id>, CursorState<'me, 'id>>
+    C: Cursor<ObjectId<'id>, CursorState<'me, 'id>> + Clone
 {
 }
 
@@ -222,13 +226,19 @@ impl<'id> NamingContext<'id, '_> {
     }
 
     pub fn cursor<'cursor>(&'cursor self) -> impl GeneratedCursor<'cursor, 'id> + Clone {
-        self.0.cursor().map_state(|state| CursorState(state))
+        self.0
+            .cursor()
+            .map_with_state((), |state, _| CursorState(state))
     }
 }
 
 impl<'me, 'id> CursorState<'me, 'id> {
+    pub fn node(&self) -> &Node<'id> {
+        self.0.node
+    }
+
     pub fn object(&self) -> &GeneratedRustObject {
-        &self.0.node.detail().object
+        &self.node().detail().object
     }
 
     pub fn associated_with(&self) -> &Option<&ObjectId<'id>> {
@@ -236,7 +246,7 @@ impl<'me, 'id> CursorState<'me, 'id> {
     }
 
     pub fn tag_for(&self, object: &RustObject) -> Option<u64> {
-        self.0.node.detail().tags.get(object).copied()
+        self.node().detail().tags.get(object).copied()
     }
 }
 

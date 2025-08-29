@@ -56,35 +56,42 @@ impl<'a> Type {
 
         drop(type_namespace);
 
-        // That is needed workaround so further written applies could modify this.
-        // TODO: In future need to write custom builder that will modify it self in-place instead of returning new.
-        // Another solution could be use crate replace_with (https://docs.rs/replace_with).
-        let mut message_type_path: Option<DocBuilder<_>> = Some(alloc.text(""));
-        namespace
+        let message_type_path_parts = namespace
             .cursor()
-            .get_generated::<objects::Module>(ObjectId(NodeId::id(self), Tag::String("module")))
-            .expect("couldn't get generated type module")
-            .map(|_, object| {
-                // cast here is unnecessary, make GetGenerated preserve type that is was getting in the returned cursor
-                message_type_path = Some(
-                    message_type_path.take().unwrap().append(
-                        objects::GeneratedModule::try_from(object)
-                            .expect("expected module")
-                            .to_doc(ctx),
-                    ),
-                );
+            .with_state(Vec::new())
+            .map(|cursor| {
+                cursor
+                    .map_cursor(|cursor| {
+                        cursor
+                            .get_generated::<objects::Module>(ObjectId(
+                                NodeId::id(self),
+                                Tag::String("module"),
+                            ))
+                            .expect("couldn't get generated type module")
+                    })
+                    .flatten_with(|mut parts, module| {
+                        parts.push(module.to_doc(ctx));
+                        parts
+                    })
             })
-            .lookup_generated::<objects::Type>(ObjectId(NodeId::id(self), Tag::String("type")))
-            .expect("couldn't get generated message type")
-            .apply(|_, object| {
-                message_type_path = Some(
-                    message_type_path.take().unwrap().append("::").append(
-                        objects::GeneratedType::try_from(object)
-                            .expect("expected type")
-                            .to_doc(ctx),
-                    ),
-                );
-            });
+            .map(|cursor| {
+                cursor
+                    .map_cursor(|cursor| {
+                        cursor
+                            .get_generated::<objects::Type>(ObjectId(
+                                NodeId::id(self),
+                                Tag::String("type"),
+                            ))
+                            .expect("couldn't get generated message type")
+                    })
+                    .flatten_with(|mut parts, ty| {
+                        parts.push(ty.to_doc(ctx));
+                        parts
+                    })
+            })
+            .into_state();
+
+        let message_type_path = alloc.intersperse(message_type_path_parts, "::");
 
         let (use_alias_name, _) = namespace.insert_object_auto_name(objects::Type::from_object(
             ObjectId(NodeId::id(self), Tag::String("type")),
@@ -220,40 +227,43 @@ mod type_dependencies_import {
                     dependencies.into_iter().map(|node_id| {
                         let global_namespace = namespace
                             .cursor()
-                            .lookup_module_root()
-                            .go_back()
+                            .navigate_module_root()
+                            .back()
                             .expect("deps module expected to be non-root")
-                            .lookup_module_root()
-                            .go_back()
+                            .navigate_module_root()
+                            .back()
                             .expect("message module expected to be non-root");
 
-                        let message_module = global_namespace
+                        let (message_module_generated, message_module_node) = global_namespace
                             .clone()
-                            .lookup_generated::<objects::Module>(ObjectId(
+                            .navigate_generated::<objects::Module>(ObjectId(
                                 node_id.clone(),
                                 Tag::String("module"),
                             ))
-                            .expect("couldn't get message module");
+                            .expect("couldn't get message module")
+                            .map_with_state((), |state, _| {
+                                (
+                                    objects::GeneratedModule::try_from(state.object())
+                                        .expect("expected module"),
+                                    // TODO: this should not be copy. References are enough, because it's non-modifiable part of tree.
+                                    state.node().clone(),
+                                )
+                            }).into_state();
 
-                        let message_type = global_namespace
-                            .lookup_generated::<objects::Type>(ObjectId(
+                        let (message_type_generated, message_type_node) = global_namespace
+                            .navigate_generated::<objects::Type>(ObjectId(
                                 node_id.clone(),
                                 Tag::String("type"),
                             ))
-                            .expect("couldn't get message type");
-
-                        let message_module_generated =
-                            objects::GeneratedModule::try_from(message_module.value())
-                                .expect("expected module");
-                        let message_type_generated =
-                            objects::GeneratedType::try_from(message_type.value())
-                                .expect("expected type");
-
-                        // TODO: those should not be copies. References are enough, because they are non-modifiable parts of tree.
-                        let message_module_node = message_module.node().clone();
-                        let message_type_node = message_type.node().clone();
-                        drop(message_module);
-                        drop(message_type);
+                            .expect("couldn't get message type")
+                            .map_with_state((), |state, _| {
+                                (
+                                    objects::GeneratedType::try_from(state.object())
+                                        .expect("expected type"),
+                                    // TODO: this should not be copy. References are enough, because it's non-modifiable part of tree.
+                                    state.node().clone()
+                                )
+                            }).into_state();
 
                         namespace.insert_tree(
                             &ObjectId(node_id.clone(), Tag::String("module")),
@@ -390,12 +400,16 @@ mod type_declaration {
 
             drop(message_type_namespace);
 
-            let (body_type, _) = namespace
+            let body_type = namespace
+                .cursor()
                 .get_generated::<objects::Type>(ObjectId::from_name("Body".to_owned()))
-                .expect("couldn't get Body type");
-            let (dependencies_type, _) = namespace
+                .expect("couldn't get Body type")
+                .into_state();
+            let dependencies_type = namespace
+                .cursor()
                 .get_generated::<objects::Type>(ObjectId::from_name("Dependencies".to_owned()))
-                .expect("couldn't get Dependencies type");
+                .expect("couldn't get Dependencies type")
+                .into_state();
 
             let message_struct = alloc
                 .text("#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]")
@@ -590,10 +604,12 @@ impl<'a> Type {
         (ctx, namespace): Context<
             'a,
             'cursor,
-            impl Cursor<&'cursor objects::GeneratedRustObject, ObjectId<'a>>,
+            impl GeneratedCursor<'cursor, 'a>,
         >,
         values: Vec<BoxDoc<'a>>,
-    ) -> BoxDoc<'a> {
+    ) -> BoxDoc<'a>
+        where 'a: 'cursor
+    {
         assert!(
             values.len() == self.dependencies.len(),
             "not enough/to much values to initialize Dependencies"
@@ -602,7 +618,8 @@ impl<'a> Type {
 
         let (dependencies_type, dependencies_cursor) = namespace
             .get_generated::<objects::Type>(ObjectId::from_name("Dependencies".to_owned()))
-            .expect("couldn't get Dependencies struct");
+            .expect("couldn't get Dependencies struct")
+            .into_parts();
 
         dependencies_type
             .to_doc(ctx)
@@ -613,15 +630,14 @@ impl<'a> Type {
                     .hardline()
                     .append(alloc.intersperse(
                         self.dependencies.iter().zip(values).map(|(symbol, value)| {
-                            let (field, _) = dependencies_cursor
+                            dependencies_cursor
                                 .clone()
                                 .get_generated::<objects::Variable>(ObjectId(
                                     NodeId::id_rc(symbol),
                                     Tag::None,
                                 ))
-                                .expect("couldn't get Dependencies field");
-
-                            field
+                                .expect("couldn't get Dependencies field")
+                                .into_state()
                                 .to_doc(ctx)
                                 .append(":")
                                 .append(alloc.space())
@@ -670,12 +686,13 @@ mod type_inherent_impl {
                 .append(alloc.space())
                 .append(
                     namespace
+                        .cursor()
                         .get_generated::<objects::Type>(ObjectId(
                             NodeId::id(self),
                             Tag::String("type"),
                         ))
                         .expect("couldn't get message type")
-                        .0
+                        .into_state()
                         .to_doc(ctx),
                 )
                 .append(alloc.space())
